@@ -1,0 +1,16 @@
+# Virtualenv
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# YOLO / Ultralytics
+runs/
+output/
+
+# Modelos treinados grandes
+*.pt
+
+# Dataset bruto (se for grande)
+input_raw/
