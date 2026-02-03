@@ -12,5 +12,6 @@ output/
 # Modelos treinados grandes
 *.pt
 
-# Dataset bruto (se for grande)
+# Datasets e dados temporários
+temp/
 input_raw/
