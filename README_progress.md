@@ -34,7 +34,44 @@ Criar um programa que:
 - O caminho das pastas foi decorado para facilitar a continuidade: `temp/passo a passo`.
 - Dependências instaladas: `opencv-python`, `pyzbar`.
 
-## Como Continuar
-1. Leia este arquivo para entender o progresso.
-2. Execute os scripts existentes ou implemente novos passos com base nos objetivos.
-3. Consulte os resultados intermediários em `scripts2/output2` para validação.
+## Como Configurar e Rodar o Projeto em Outro Computador
+
+### Dependências Necessárias
+Certifique-se de ter as seguintes dependências instaladas:
+- Python 3.8 ou superior
+- Bibliotecas Python:
+  - `numpy`
+  - `Pillow`
+  - `rembg`
+  - `opencv-python`
+  - `pyzbar`
+
+### Passos para Configuração
+1. Clone o repositório:
+   ```bash
+   git clone <URL_DO_REPOSITORIO>
+   ```
+2. Navegue até o diretório do projeto:
+   ```bash
+   cd joias_automation
+   ```
+3. Crie e ative um ambiente virtual (recomendado):
+   ```bash
+   python -m venv venv
+   source venv/bin/activate # No Windows: venv\Scripts\activate
+   ```
+4. Instale as dependências:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Executando o Projeto
+1. Certifique-se de que as imagens de entrada estão na pasta correta (`input_raw/fotos_originais`).
+2. Execute o script principal:
+   ```bash
+   python scripts/pipeline.py
+   ```
+3. Verifique os resultados na pasta `output`.
+
+### Observação
+Se encontrar erros, consulte os logs ou revise os scripts na pasta `scripts` para ajustes.

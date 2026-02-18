@@ -23,7 +23,8 @@ def rodar_barcode():
             continue
 
         caminho = os.path.join(ETIQUETAS_DIR, nome)
-        codigo = ler_barcode_imagem(caminho)
+        # Ativar a remoção da etiqueta ao ler o código
+        codigo = ler_barcode_imagem(caminho, remover_etiqueta=True)
 
         resultados.append((nome, codigo))
 
