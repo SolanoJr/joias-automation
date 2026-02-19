@@ -1,66 +1,87 @@
 import cv2
 from pyzbar import pyzbar
 from pathlib import Path
+import os
+import sys
+import contextlib
 
 PASTA_ETIQUETAS = Path("output/etiquetas")
 
-def _tentar_decode(img):
-    resultados = pyzbar.decode(img)
+@contextlib.contextmanager
+def silenciar_stderr():
+    old = sys.stderr
+    try:
+        with open(os.devnull, "w") as devnull:
+            sys.stderr = devnull
+            yield
+    finally:
+        sys.stderr = old
+
+def _tentar_ler_array(img_array):
+    with silenciar_stderr():
+        resultados = pyzbar.decode(img_array)
     for r in resultados:
         codigo = r.data.decode("utf-8").strip()
         if codigo.isdigit() and len(codigo) >= 8:
             return codigo
     return None
 
-def ler_codigo_de_imagem(img_path: Path) -> str | None:
-    img = cv2.imread(str(img_path))
+def _rotacoes(img):
+    # img pode ser 2D (gray) ou 3D (BGR)
+    yield img
+    yield cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    yield cv2.rotate(img, cv2.ROTATE_180)
+    yield cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+def ler_barcode_imagem(caminho_img: Path):
+    img = cv2.imread(str(caminho_img))
     if img is None:
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # tentativa 1: grayscale
-    codigo = _tentar_decode(gray)
+    # tentativas em ordem do "menos intrusivo" pro "mais intrusivo"
+    variantes = []
+    variantes.append(gray)  # 1) cru
+    variantes.append(cv2.GaussianBlur(gray, (3, 3), 0))  # 2) blur leve
 
-    # tentativa 2: blur leve
-    if codigo is None:
-        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-        codigo = _tentar_decode(blur)
+    # 3) upscale leve e médio
+    variantes.append(cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC))
+    variantes.append(cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC))
 
-    # tentativa 3: upscale
-    if codigo is None:
-        upscale = cv2.resize(gray, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-        codigo = _tentar_decode(upscale)
+    # tenta cada variante em todas as rotações
+    for v in variantes:
+        for vr in _rotacoes(v):
+            codigo = _tentar_ler_array(vr)
+            if codigo:
+                return codigo
 
-    return codigo
+    return None
 
-def ler_codigos_pasta(pasta: Path = PASTA_ETIQUETAS) -> dict[str, str]:
-    """
-    Retorna dict: { 'arquivo_etiqueta.jpg': 'codigo' }
-    Só inclui os que deram leitura válida.
-    """
-    saida = {}
-    for img_path in sorted(pasta.glob("*.jpg")):
-        codigo = ler_codigo_de_imagem(img_path)
-        if codigo:
-            saida[img_path.name] = codigo
-    return saida
+def ler_codigos_da_pasta(pasta: Path = PASTA_ETIQUETAS):
+    resultados = {}
+    for img_path in sorted(pasta.glob("*_warp.jpg")):
+        resultados[img_path.name] = ler_barcode_imagem(img_path)
+
+    # If no warp images are found, fallback to raw images
+    if not resultados:
+        for img_path in sorted(pasta.glob("*_raw.jpg")):
+            resultados[img_path.name] = ler_barcode_imagem(img_path)
+
+    return resultados
 
 if __name__ == "__main__":
-    print("Iniciando leitura de código de barras (robusto)...\n")
+    print("Iniciando leitura de código de barras (simples)...\n")
+    resultados = ler_codigos_da_pasta(PASTA_ETIQUETAS)
 
-    for img_path in sorted(PASTA_ETIQUETAS.glob("*.jpg")):
-        print(f"Imagem: {img_path.name}")
-        codigo = ler_codigo_de_imagem(img_path)
+    ok = 0
+    for nome, codigo in resultados.items():
+        print(f"Imagem: {nome}")
         if codigo:
+            ok += 1
             print(f"Código válido: {codigo}")
         else:
             print("Nenhum código detectado")
         print("-" * 40)
 
-"""
-STATUS: FUNCIONAL
-Data: 29/01/2026+
-Leitura de código de barras validada em múltiplas imagens reais.
-Este script é o método principal (OCR descartado como fallback por enquanto).
-"""
+    print(f"\nResumo: {ok} OK / {len(resultados)} total")
