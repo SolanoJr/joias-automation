@@ -2,6 +2,8 @@ import os
 import csv
 import sys
 import subprocess
+from pathlib import Path
+
 ETIQUETAS_DIR = "output/etiquetas"
 CSV_PATH = "output/resultados.csv"
 
@@ -16,7 +18,7 @@ def rodar_detect_etiqueta():
 def rodar_barcode():
     resultados = []
 
-    from barcode_etiqueta import ler_barcode_imagem
+    from barcode_etiqueta import ler_codigo_de_imagem as ler_barcode_imagem
 
     for nome in sorted(os.listdir(ETIQUETAS_DIR)):
         if not nome.lower().endswith(".jpg"):
@@ -24,7 +26,8 @@ def rodar_barcode():
 
         caminho = os.path.join(ETIQUETAS_DIR, nome)
         # Ativar a remoção da etiqueta ao ler o código
-        codigo = ler_barcode_imagem(caminho, remover_etiqueta=True)
+        caminho = Path(caminho)
+        codigo = ler_barcode_imagem(caminho)
 
         resultados.append((nome, codigo))
 
