@@ -75,3 +75,120 @@ Certifique-se de ter as seguintes dependências instaladas:
 
 ### Observação
 Se encontrar erros, consulte os logs ou revise os scripts na pasta `scripts` para ajustes.
+
+---
+
+# Joias Automation - Guia de Configuração e Execução
+
+Este documento fornece instruções detalhadas para configurar e executar o projeto em outro computador. Inclui links para downloads necessários e explicações sobre os scripts e fluxos de trabalho.
+
+---
+
+## Requisitos do Sistema
+
+- **Sistema Operacional**: Windows 10 ou superior
+- **Python**: Versão 3.10 ou superior
+- **Git**: Para controle de versão
+- **Git LFS**: Para gerenciar arquivos grandes
+
+---
+
+## Passo 1: Clonar o Repositório
+
+1. Instale o Git: [Download Git](https://git-scm.com/downloads)
+2. Instale o Git LFS: [Download Git LFS](https://git-lfs.github.com/)
+3. Clone o repositório:
+   ```bash
+   git clone https://github.com/SolanoJr/joias-automation.git
+   cd joias-automation
+   git lfs install
+   ```
+
+---
+
+## Passo 2: Configurar o Ambiente Python
+
+1. Instale o Python: [Download Python](https://www.python.org/downloads/)
+2. Crie e ative um ambiente virtual:
+   ```bash
+   python -m venv venv
+   venv\Scripts\activate
+   ```
+3. Instale as dependências:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+---
+
+## Passo 3: Baixar Modelos Necessários
+
+1. **SAM Model**:
+   - Baixe o modelo SAM ViT-B: [sam_vit_b.pth](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth)
+   - Salve em `models/sam_vit_b.pth`
+
+2. **YOLO Model**:
+   - Baixe o modelo YOLO: [best.pt](https://link-para-o-modelo-yolo)
+   - Salve em `models/best.pt`
+
+---
+
+## Passo 4: Estrutura de Pastas
+
+Certifique-se de que a estrutura de pastas esteja conforme abaixo:
+```
+input_raw/
+  fotos_originais/
+models/
+output/
+  etiquetas/
+  etiquetas_crop/
+  joias_limpa/
+  ...
+```
+
+---
+
+## Passo 5: Executar o Pipeline
+
+1. Ative o ambiente virtual:
+   ```bash
+   venv\Scripts\activate
+   ```
+2. Execute o pipeline principal:
+   ```bash
+   python scripts/pipeline.py
+   ```
+
+---
+
+## Passo 6: Resolver Problemas Comuns
+
+- **Erro de arquivo grande ao fazer push**:
+  - Certifique-se de que o Git LFS está configurado corretamente.
+  - Adicione arquivos grandes ao Git LFS:
+    ```bash
+    git lfs track "models/sam_vit_b.pth"
+    git add .gitattributes models/sam_vit_b.pth
+    git commit -m "Adicionando suporte ao Git LFS"
+    ```
+
+- **Dependências ausentes**:
+  - Reinstale as dependências:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+---
+
+## Passo 7: Links Úteis
+
+- Repositório Original do Segment Anything: [segment-anything](https://github.com/facebookresearch/segment-anything)
+- Documentação do YOLO: [YOLO Docs](https://github.com/ultralytics/yolov5)
+- Git LFS: [Git LFS](https://git-lfs.github.com/)
+
+---
+
+## Contato
+
+Para dúvidas ou problemas, entre em contato com [SolanoJr](mailto:solanojr@example.com).
