@@ -1,0 +1,6 @@
+path: datasets/codigo_v1
+train: images/train
+val: images/valid
+
+nc: 2
+names: ["etiqueta", "paint"]

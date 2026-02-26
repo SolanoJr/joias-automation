@@ -14,19 +14,29 @@ FINAL_DIR.mkdir(parents=True, exist_ok=True)
 # Importa do seu barcode_etiqueta.py
 from barcode_etiqueta import ler_barcode_imagem
 
+
 def stem_base(nome_arquivo: str) -> str:
     """
-    Remove sufixos tipo _etiqueta_0, _warp etc e devolve o "id" da foto original.
+    Normaliza nomes para bater "foto base".
+    Remove:
+      - _etiqueta_0, _etiqueta_1, etc (e qualquer sufixo depois)
+      - _warp
+      - _sem_etiqueta
     Ex:
       20260107_132828_etiqueta_0_warp.jpg -> 20260107_132828
       1200910006_etiqueta_1.jpg -> 1200910006
+      1200910006_sem_etiqueta.jpg -> 1200910006
     """
     s = Path(nome_arquivo).stem
     s = re.sub(r"_etiqueta_\d+.*$", "", s)
+    s = re.sub(r"_warp$", "", s)
+    s = re.sub(r"_sem_etiqueta$", "", s)
     return s
+
 
 def is_numeric_stem(stem: str) -> bool:
     return stem.isdigit()
+
 
 def mapear_codigos_por_imagem() -> dict:
     """
@@ -37,14 +47,34 @@ def mapear_codigos_por_imagem() -> dict:
     mapa = {}
     for p in sorted(ETI_DIR.glob("*.jpg")):
         base = stem_base(p.name)
+
+        # já tem código válido, não perde tempo
         if base in mapa and mapa[base]:
-            continue  # já temos código
+            continue
+
         codigo = ler_barcode_imagem(p)
         if codigo:
             mapa[base] = codigo
         else:
             mapa.setdefault(base, None)
+
     return mapa
+
+
+def nome_unico(dest_dir: Path, nome_base: str) -> str:
+    """
+    Gera nome único tipo:
+      1201410006.jpg
+      1201410006_2.jpg
+      1201410006_3.jpg
+    """
+    out_name = f"{nome_base}.jpg"
+    i = 2
+    while (dest_dir / out_name).exists():
+        out_name = f"{nome_base}_{i}.jpg"
+        i += 1
+    return out_name
+
 
 def main():
     if not SEG_DIR.exists():
@@ -62,34 +92,40 @@ def main():
     sem_codigo = 0
 
     rows = []
-    usados = set()
 
     for img in seg_imgs:
-        base = img.stem  # aqui é o nome da foto (sem _sem_etiqueta)
+        base = stem_base(img.name)  # <<< importante: remove _sem_etiqueta etc
         codigo = mapa.get(base)
 
         # fallback: se o nome já é número, usa como código
         if not codigo and is_numeric_stem(base):
             codigo = base
 
-        if codigo:
-            if img.stem == codigo:
-                status = "JA_CORRETO"
-            else:
-                # evita sobrescrever se repetir
-                out_name = f"{codigo}.jpg"
-                i = 2
-                while out_name in usados or (FINAL_DIR / out_name).exists():
-                    out_name = f"{codigo}_{i}.jpg"
-                    i += 1
+        dest = None
+        status = None
 
-                usados.add(out_name)
+        if codigo:
+            # sempre vai pra pasta final (entrega)
+            if base == codigo:
+                # já está correto, mas ainda copiamos para FINAL_DIR com mesmo nome
+                out_name = f"{codigo}.jpg"
+                dest = FINAL_DIR / out_name
+
+                # não sobrescreve: se já existe, cria sufixo
+                if dest.exists():
+                    out_name = nome_unico(FINAL_DIR, codigo)
+                    dest = FINAL_DIR / out_name
+
+                shutil.copy2(img, dest)
+                status = "JA_CORRETO"
+                ok += 1
+            else:
+                out_name = nome_unico(FINAL_DIR, codigo)
                 dest = FINAL_DIR / out_name
                 shutil.copy2(img, dest)
                 status = "RENOMEADO"
                 ok += 1
         else:
-            dest = None
             status = "SEM_CODIGO"
             sem_codigo += 1
 
@@ -103,13 +139,17 @@ def main():
 
     # CSV
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["arquivo_origem", "base", "codigo", "arquivo_final", "status"])
+        w = csv.DictWriter(
+            f,
+            fieldnames=["arquivo_origem", "base", "codigo", "arquivo_final", "status"]
+        )
         w.writeheader()
         w.writerows(rows)
 
     print(f"Final OK: {ok}")
     print(f"Sem codigo: {sem_codigo}")
     print(f"CSV: {CSV_PATH}")
+
 
 if __name__ == "__main__":
     main()
