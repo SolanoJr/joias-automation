@@ -5,14 +5,13 @@ from pathlib import Path
 
 # Pastas
 SEG_DIR = Path("output/segmentado_rembg")
-ETI_DIR = Path("output/etiquetas")
 FINAL_DIR = Path("output/final")
 CSV_PATH = Path("output/resultados.csv")
 
 FINAL_DIR.mkdir(parents=True, exist_ok=True)
 
-# Importa do seu barcode_etiqueta.py
-from barcode_etiqueta import ler_barcode_imagem
+# Importa leitor unificado de código
+from ler_codigo import ler_codigo_unico
 
 
 def stem_base(nome_arquivo: str) -> str:
@@ -38,29 +37,6 @@ def is_numeric_stem(stem: str) -> bool:
     return stem.isdigit()
 
 
-def mapear_codigos_por_imagem() -> dict:
-    """
-    Lê todas as etiquetas e devolve:
-      { base_stem_da_foto: codigo_ou_None }
-    Se existir mais de uma etiqueta, pega o primeiro código válido.
-    """
-    mapa = {}
-    for p in sorted(ETI_DIR.glob("*.jpg")):
-        base = stem_base(p.name)
-
-        # já tem código válido, não perde tempo
-        if base in mapa and mapa[base]:
-            continue
-
-        codigo = ler_barcode_imagem(p)
-        if codigo:
-            mapa[base] = codigo
-        else:
-            mapa.setdefault(base, None)
-
-    return mapa
-
-
 def nome_unico(dest_dir: Path, nome_base: str) -> str:
     """
     Gera nome único tipo:
@@ -76,6 +52,11 @@ def nome_unico(dest_dir: Path, nome_base: str) -> str:
     return out_name
 
 
+def normalizar_base_para_nome(base: str) -> str:
+    limpo = re.sub(r"[^A-Za-z0-9_-]+", "_", base).strip("_")
+    return limpo or "imagem"
+
+
 def main():
     if not SEG_DIR.exists():
         print(f"ERRO: não existe {SEG_DIR}")
@@ -86,8 +67,6 @@ def main():
         print(f"ERRO: nenhuma imagem em {SEG_DIR}")
         return
 
-    mapa = mapear_codigos_por_imagem()
-
     ok = 0
     sem_codigo = 0
 
@@ -95,11 +74,12 @@ def main():
 
     for img in seg_imgs:
         base = stem_base(img.name)  # <<< importante: remove _sem_etiqueta etc
-        codigo = mapa.get(base)
+        codigo, fonte = ler_codigo_unico(base)
 
         # fallback: se o nome já é número, usa como código
         if not codigo and is_numeric_stem(base):
             codigo = base
+            fonte = "NOME_ARQUIVO"
 
         dest = None
         status = None
@@ -126,13 +106,18 @@ def main():
                 status = "RENOMEADO"
                 ok += 1
         else:
-            status = "SEM_CODIGO"
+            base_limpo = normalizar_base_para_nome(base)
+            out_name = nome_unico(FINAL_DIR, f"SEMCOD_{base_limpo}")
+            dest = FINAL_DIR / out_name
+            shutil.copy2(img, dest)
+            status = "SEM_CODIGO_COPIADO"
             sem_codigo += 1
 
         rows.append({
             "arquivo_origem": str(img).replace("\\", "/"),
             "base": base,
             "codigo": codigo or "",
+            "fonte": fonte or "",
             "arquivo_final": str(dest).replace("\\", "/") if dest else "",
             "status": status
         })
@@ -141,7 +126,7 @@ def main():
     with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(
             f,
-            fieldnames=["arquivo_origem", "base", "codigo", "arquivo_final", "status"]
+            fieldnames=["arquivo_origem", "base", "codigo", "fonte", "arquivo_final", "status"]
         )
         w.writeheader()
         w.writerows(rows)
