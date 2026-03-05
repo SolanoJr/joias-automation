@@ -8,7 +8,7 @@ from io import BytesIO
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-USE_ORIGINAL_INPUT = True
+USE_ORIGINAL_INPUT = False
 ORIGINAL_INPUT_DIR = Path("input_raw/fotos_originais")
 SEM_ETIQUETA_INPUT_DIR = Path("output/sem_etiqueta")
 INPUT_DIR = ORIGINAL_INPUT_DIR if USE_ORIGINAL_INPUT else SEM_ETIQUETA_INPUT_DIR
@@ -16,15 +16,16 @@ OUTPUT_DIR = Path("output/segmentado_rembg")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SIZE = 1024
-MAX_SCALE = 0.78
-MARGIN_RATIO = 0.05
+MAX_SCALE = 0.75
+MARGIN_RATIO = 0.06
 MARGIN_MIN = 24
-MARGIN_MAX = 96
+MARGIN_MAX = 112
 ALPHA_THRESHOLD = 10
 DILATE_ITERATIONS = 1
 FALLBACK_ORIGINAL_SE_FALHAR = True
 MIN_FOREGROUND_RATIO = 0.012
 MIN_BBOX_AREA_RATIO = 0.02
+MIN_COMPONENT_AREA_RATIO = 0.010
 
 session = new_session("isnet-general-use")
 
@@ -61,6 +62,20 @@ def _renderizar_no_fundo_branco(rgba_img: Image.Image) -> Image.Image:
     fundo.paste(base, (x, y), base)
     return fundo.convert("RGB")
 
+
+def _renderizar_fallback_original(imagem_path: Path, imagem_atual: Image.Image) -> Image.Image:
+    original_path = ORIGINAL_INPUT_DIR / imagem_path.name
+    if original_path.exists():
+        try:
+            original = Image.open(original_path)
+            original = ImageOps.exif_transpose(original)
+            original = original.convert("RGBA")
+            return _renderizar_no_fundo_branco(original)
+        except Exception:
+            pass
+
+    return _renderizar_no_fundo_branco(imagem_atual)
+
 def processar(imagem_path: Path):
     try:
         img = Image.open(imagem_path)
@@ -81,7 +96,7 @@ def processar(imagem_path: Path):
         logging.error(f"Tipo de saída do rembg não suportado em {imagem_path.name}")
         if FALLBACK_ORIGINAL_SE_FALHAR:
             logging.warning(f"Fallback original em {imagem_path.name}")
-            return _renderizar_no_fundo_branco(img)
+            return _renderizar_fallback_original(imagem_path, img)
         return None
 
     arr = np.array(sem_fundo)
@@ -91,12 +106,31 @@ def processar(imagem_path: Path):
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=DILATE_ITERATIONS).astype(bool)
 
+    # mantém apenas o maior componente conectado para reduzir ruído/falsos positivos
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
+    if num_labels > 1:
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        maior_idx = int(np.argmax(areas)) + 1
+        maior_area = int(stats[maior_idx, cv2.CC_STAT_AREA])
+        total_area = int(mask.shape[0] * mask.shape[1])
+        comp_ratio = maior_area / float(total_area)
+
+        if comp_ratio < MIN_COMPONENT_AREA_RATIO:
+            logging.warning(
+                f"Componente principal muito pequeno em {imagem_path.name} (comp={comp_ratio:.4f}); usando fallback original"
+            )
+            if FALLBACK_ORIGINAL_SE_FALHAR:
+                return _renderizar_fallback_original(imagem_path, img)
+            return None
+
+        mask = labels == maior_idx
+
     coords = np.column_stack(np.where(mask))
     if coords.size == 0:
         logging.warning(f"Nada detectado em {imagem_path.name}")
         if FALLBACK_ORIGINAL_SE_FALHAR:
             logging.warning(f"Fallback original em {imagem_path.name}")
-            return _renderizar_no_fundo_branco(img)
+            return _renderizar_fallback_original(imagem_path, img)
         return None
 
     foreground_ratio = float(mask.mean())
@@ -105,7 +139,7 @@ def processar(imagem_path: Path):
             f"Máscara muito pequena em {imagem_path.name} (ratio={foreground_ratio:.4f}); usando fallback original"
         )
         if FALLBACK_ORIGINAL_SE_FALHAR:
-            return _renderizar_no_fundo_branco(img)
+            return _renderizar_fallback_original(imagem_path, img)
         return None
 
     y1, x1 = coords.min(axis=0)
@@ -117,7 +151,7 @@ def processar(imagem_path: Path):
             f"BBox muito pequena em {imagem_path.name} (bbox={bbox_area_ratio:.4f}); usando fallback original"
         )
         if FALLBACK_ORIGINAL_SE_FALHAR:
-            return _renderizar_no_fundo_branco(img)
+            return _renderizar_fallback_original(imagem_path, img)
         return None
 
     margem = int(min(arr.shape[:2]) * MARGIN_RATIO)

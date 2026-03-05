@@ -7,6 +7,7 @@ from pathlib import Path
 SEG_DIR = Path("output/segmentado_rembg")
 FINAL_DIR = Path("output/final")
 CSV_PATH = Path("output/resultados.csv")
+LIMPAR_FINAL_ANTES = True
 
 FINAL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -66,6 +67,10 @@ def main():
     if not seg_imgs:
         print(f"ERRO: nenhuma imagem em {SEG_DIR}")
         return
+
+    if LIMPAR_FINAL_ANTES and FINAL_DIR.exists():
+        shutil.rmtree(FINAL_DIR, ignore_errors=True)
+        FINAL_DIR.mkdir(parents=True, exist_ok=True)
 
     ok = 0
     sem_codigo = 0
@@ -130,6 +135,18 @@ def main():
         )
         w.writeheader()
         w.writerows(rows)
+
+    esperados = {
+        Path(r["arquivo_final"]).name
+        for r in rows
+        if r.get("arquivo_final")
+    }
+    for p in FINAL_DIR.glob("*.jpg"):
+        if p.name not in esperados:
+            try:
+                p.unlink()
+            except Exception:
+                pass
 
     print(f"Final OK: {ok}")
     print(f"Sem codigo: {sem_codigo}")
