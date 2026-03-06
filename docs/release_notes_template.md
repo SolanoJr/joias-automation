@@ -33,6 +33,12 @@ Resumo curto da entrega em 2-4 linhas.
   - 
 
 ## Comandos úteis
+Automação completa (1 comando):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -ReleaseVersion vX.Y.Z -NotesFile docs/release_notes_vX.Y.Z.md
+```
+
 Criar release com arquivo de notas:
 
 ```powershell
