@@ -8,10 +8,12 @@ PASTAS_SAIDA = [
     Path("output/etiquetas"),
     Path("output/paints"),
     Path("output/sem_etiqueta"),
+    Path("output/quadrado_manual"),
     Path("output/segmentado_rembg"),
     Path("output/final"),
 ]
 CSV_SAIDA = Path("output/resultados.csv")
+BASELINE_VALIDACAO = Path("output/analysis/baseline_validacao.json")
 
 def run(cmd, msg):
     print(msg)
@@ -34,8 +36,20 @@ def main():
         limpar_saidas()
 
     run([sys.executable, "scripts/detect_etiqueta.py"], "Rodando detecção de etiquetas...")
+    run([sys.executable, "scripts/preparar_quadrado_manual.py"], "Preparando pasta quadrada manual...")
     run([sys.executable, "scripts/segment_rembg.py"], "Rodando segmentação (rembg/isnet)...")
     run([sys.executable, "scripts/renomear_final.py"], "Renomeando e gerando CSV...")
+
+    if BASELINE_VALIDACAO.exists():
+        run(
+            [sys.executable, "scripts/validar_saidas.py", "--mode", "validate"],
+            "Validando regressão de saídas...",
+        )
+    else:
+        print(
+            "Baseline de validação não encontrado. "
+            "Crie com: python scripts/validar_saidas.py --mode create-baseline"
+        )
 
     print("Pipeline finalizado.")
 

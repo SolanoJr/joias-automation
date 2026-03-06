@@ -58,6 +58,17 @@ def normalizar_base_para_nome(base: str) -> str:
     return limpo or "imagem"
 
 
+def sufixo_por_fonte(fonte: str | None) -> str:
+    fonte = (fonte or "").lower()
+    if "paint" in fonte:
+        return "_p"
+    if "etiqueta" in fonte or "barcode" in fonte:
+        return "_e"
+    if "sem_etiqueta" in fonte or "ocr_sem_etiqueta" in fonte:
+        return "_se"
+    return ""
+
+
 def main():
     if not SEG_DIR.exists():
         print(f"ERRO: não existe {SEG_DIR}")
@@ -90,22 +101,25 @@ def main():
         status = None
 
         if codigo:
+            sufixo = sufixo_por_fonte(fonte)
+            codigo_saida = f"{codigo}{sufixo}" if sufixo else codigo
+
             # sempre vai pra pasta final (entrega)
-            if base == codigo:
+            if base == codigo_saida:
                 # já está correto, mas ainda copiamos para FINAL_DIR com mesmo nome
-                out_name = f"{codigo}.jpg"
+                out_name = f"{codigo_saida}.jpg"
                 dest = FINAL_DIR / out_name
 
                 # não sobrescreve: se já existe, cria sufixo
                 if dest.exists():
-                    out_name = nome_unico(FINAL_DIR, codigo)
+                    out_name = nome_unico(FINAL_DIR, codigo_saida)
                     dest = FINAL_DIR / out_name
 
                 shutil.copy2(img, dest)
                 status = "JA_CORRETO"
                 ok += 1
             else:
-                out_name = nome_unico(FINAL_DIR, codigo)
+                out_name = nome_unico(FINAL_DIR, codigo_saida)
                 dest = FINAL_DIR / out_name
                 shutil.copy2(img, dest)
                 status = "RENOMEADO"

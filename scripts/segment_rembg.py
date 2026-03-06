@@ -23,9 +23,11 @@ MARGIN_MAX = 112
 ALPHA_THRESHOLD = 10
 DILATE_ITERATIONS = 1
 FALLBACK_ORIGINAL_SE_FALHAR = True
+FALLBACK_USAR_ORIGINAL = False
 MIN_FOREGROUND_RATIO = 0.012
 MIN_BBOX_AREA_RATIO = 0.02
 MIN_COMPONENT_AREA_RATIO = 0.010
+MANTER_APENAS_MAIOR_COMPONENTE = False
 
 session = new_session("isnet-general-use")
 
@@ -64,6 +66,9 @@ def _renderizar_no_fundo_branco(rgba_img: Image.Image) -> Image.Image:
 
 
 def _renderizar_fallback_original(imagem_path: Path, imagem_atual: Image.Image) -> Image.Image:
+    if not FALLBACK_USAR_ORIGINAL:
+        return _renderizar_no_fundo_branco(imagem_atual)
+
     original_path = ORIGINAL_INPUT_DIR / imagem_path.name
     if original_path.exists():
         try:
@@ -106,9 +111,9 @@ def processar(imagem_path: Path):
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=DILATE_ITERATIONS).astype(bool)
 
-    # mantém apenas o maior componente conectado para reduzir ruído/falsos positivos
+    # opcional: mantém apenas o maior componente conectado
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
-    if num_labels > 1:
+    if MANTER_APENAS_MAIOR_COMPONENTE and num_labels > 1:
         areas = stats[1:, cv2.CC_STAT_AREA]
         maior_idx = int(np.argmax(areas)) + 1
         maior_area = int(stats[maior_idx, cv2.CC_STAT_AREA])
