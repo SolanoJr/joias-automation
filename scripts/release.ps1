@@ -54,18 +54,18 @@ function Invoke-Step {
 }
 
 function Run-Git {
-    param([string[]]$Args)
-    & git @Args
+    param([string[]]$GitArgs)
+    & git @GitArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "Falha em: git $($Args -join ' ')"
+        throw "Falha em: git $($GitArgs -join ' ')"
     }
 }
 
 function Run-Gh {
-    param([string[]]$Args)
-    & $ghPath @Args
+    param([string[]]$GhArgs)
+    & $ghPath @GhArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "Falha em: gh $($Args -join ' ')"
+        throw "Falha em: gh $($GhArgs -join ' ')"
     }
 }
 
@@ -75,7 +75,7 @@ if (-not (Test-Path $notesPath)) {
 }
 
 Invoke-Step "Verificando autenticação gh" {
-    Run-Gh -Args @("auth", "status")
+    Run-Gh -GhArgs @("auth", "status")
 }
 
 $localTag = "$(& git tag --list $ReleaseVersion)"
@@ -92,8 +92,8 @@ if (-not $NoCommit) {
     $status = "$(& git status --porcelain)"
     if ($status -match "\S") {
         Invoke-Step "Commitando alterações pendentes" {
-            Run-Git -Args @("add", "-A")
-            Run-Git -Args @("commit", "-m", $CommitMessage)
+            Run-Git -GitArgs @("add", "-A")
+            Run-Git -GitArgs @("commit", "-m", $CommitMessage)
         }
     }
     else {
@@ -103,20 +103,20 @@ if (-not $NoCommit) {
 
 if (-not $NoPushMain) {
     Invoke-Step "Enviando branch main" {
-        Run-Git -Args @("push", "origin", "main")
+        Run-Git -GitArgs @("push", "origin", "main")
     }
 }
 
 Invoke-Step "Criando tag anotada" {
-    Run-Git -Args @("tag", "-a", $ReleaseVersion, "-m", "$ReleaseVersion")
+    Run-Git -GitArgs @("tag", "-a", $ReleaseVersion, "-m", "$ReleaseVersion")
 }
 
 Invoke-Step "Enviando tag" {
-    Run-Git -Args @("push", "origin", $ReleaseVersion)
+    Run-Git -GitArgs @("push", "origin", $ReleaseVersion)
 }
 
 Invoke-Step "Criando release no GitHub" {
-    Run-Gh -Args @(
+    Run-Gh -GhArgs @(
         "release", "create", $ReleaseVersion,
         "--repo", $Repo,
         "--title", $ReleaseVersion,
