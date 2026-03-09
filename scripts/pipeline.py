@@ -39,6 +39,8 @@ def main():
     run([sys.executable, "scripts/preparar_quadrado_manual.py"], "Preparando pasta quadrada manual...")
     run([sys.executable, "scripts/segment_rembg.py"], "Rodando segmentação (rembg/isnet)...")
     run([sys.executable, "scripts/renomear_final.py"], "Renomeando e gerando CSV...")
+    run([sys.executable, "scripts/renomear_intermediarios.py"], "Renomeando pastas intermediárias por código...")
+    run([sys.executable, "scripts/organizar_pastas_numeradas.py"], "Gerando pastas numeradas (espelho)...")
 
     if BASELINE_VALIDACAO.exists():
         run(
