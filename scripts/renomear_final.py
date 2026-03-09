@@ -101,8 +101,7 @@ def main():
         status = None
 
         if codigo:
-            sufixo = sufixo_por_fonte(fonte)
-            codigo_saida = f"{codigo}{sufixo}" if sufixo else codigo
+            codigo_saida = codigo
 
             # sempre vai pra pasta final (entrega)
             if base == codigo_saida:
@@ -126,7 +125,7 @@ def main():
                 ok += 1
         else:
             base_limpo = normalizar_base_para_nome(base)
-            out_name = nome_unico(FINAL_DIR, f"SEMCOD_{base_limpo}")
+            out_name = nome_unico(FINAL_DIR, f"{base_limpo}_semcod")
             dest = FINAL_DIR / out_name
             shutil.copy2(img, dest)
             status = "SEM_CODIGO_COPIADO"

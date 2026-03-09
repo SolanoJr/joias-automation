@@ -10,8 +10,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 USE_ORIGINAL_INPUT = False
 ORIGINAL_INPUT_DIR = Path("input_raw/fotos_originais")
-SEM_ETIQUETA_INPUT_DIR = Path("output/sem_etiqueta")
-INPUT_DIR = ORIGINAL_INPUT_DIR if USE_ORIGINAL_INPUT else SEM_ETIQUETA_INPUT_DIR
+QUADRADO_MANUAL_INPUT_DIR = Path("output/quadrado_manual")
+INPUT_DIR = ORIGINAL_INPUT_DIR if USE_ORIGINAL_INPUT else QUADRADO_MANUAL_INPUT_DIR
 OUTPUT_DIR = Path("output/segmentado_rembg")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
