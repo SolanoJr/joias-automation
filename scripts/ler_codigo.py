@@ -34,6 +34,96 @@ SHORT_BARCODE_MIN_CONSENSUS = 2
 ENABLE_PAINT_INTENSIVO = os.getenv("ENABLE_PAINT_INTENSIVO", "0").strip().lower() in {"1", "true", "yes", "on"}
 PRIORITIZE_BARCODE_FIRST = os.getenv("PRIORITIZE_BARCODE_FIRST", "0").strip().lower() in {"1", "true", "yes", "on"}
 OCR_ETIQUETA_ADAPTIVE = os.getenv("OCR_ETIQUETA_ADAPTIVE", "0").strip().lower() in {"1", "true", "yes", "on"}
+LER_CODIGO_CANONICAL_ONLY = os.getenv("LER_CODIGO_CANONICAL_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
+CODE_READ_TIMEOUT_SIMPLE_S = float((os.getenv("CODE_READ_TIMEOUT_SIMPLE_S") or "2.0").strip() or "2.0")
+CODE_READ_TIMEOUT_INTENSIVO_S = float((os.getenv("CODE_READ_TIMEOUT_INTENSIVO_S") or "8.0").strip() or "8.0")
+CODE_READ_TIMEOUT_OCR_S = float((os.getenv("CODE_READ_TIMEOUT_OCR_S") or "12.0").strip() or "12.0")
+CODE_READ_TIMEOUT_ITEM_S = float((os.getenv("CODE_READ_TIMEOUT_ITEM_S") or "20.0").strip() or "20.0")
+
+
+def _now() -> float:
+    return time.perf_counter()
+
+
+def _deadline_exceeded(deadline: float | None) -> bool:
+    if deadline is None:
+        return False
+    return _now() >= deadline
+
+
+def _stage_deadline(item_deadline: float | None, stage_budget_s: float) -> float | None:
+    if stage_budget_s <= 0:
+        return None
+    local = _now() + stage_budget_s
+    if item_deadline is None:
+        return local
+    return min(local, item_deadline)
+
+
+def _is_valid_candidate(codigo: str | None) -> bool:
+    return bool(codigo and len(codigo) == CODIGO_LEN_ALVO and codigo.isdigit())
+
+
+def _has_useful_signal(
+    etiquetas: list[Path],
+    paints: list[Path],
+    has_partial_6plus: bool,
+    has_short_candidate: bool,
+) -> bool:
+    return bool(has_partial_6plus or has_short_candidate)
+
+
+def _listar_por_patterns(folder: Path, patterns: list[str]) -> list[Path]:
+    encontrados: dict[str, Path] = {}
+    for pattern in patterns:
+        for p in sorted(folder.glob(pattern)):
+            encontrados[str(p.resolve())] = p
+    return sorted(encontrados.values(), key=lambda x: x.name)
+
+
+def _listar_etiquetas(base: str) -> list[Path]:
+    if LER_CODIGO_CANONICAL_ONLY:
+        return _listar_por_patterns(ETI_DIR, [f"{base}_etiqueta_*.jpg"])
+
+    return _listar_por_patterns(
+        ETI_DIR,
+        [
+            f"{base}_etiqueta_*.jpg",
+            f"{base} - *_e*.jpg",
+        ],
+    )
+
+
+def _listar_paints(base: str) -> list[Path]:
+    if LER_CODIGO_CANONICAL_ONLY:
+        return _listar_por_patterns(PAINTS_DIR, [f"{base}_paint_*.jpg"])
+
+    return _listar_por_patterns(
+        PAINTS_DIR,
+        [
+            f"{base}_paint_*.jpg",
+            f"{base} - *_p*.jpg",
+        ],
+    )
+
+
+def _buscar_sem_etiqueta(base: str) -> Path | None:
+    if LER_CODIGO_CANONICAL_ONLY:
+        candidatos = _listar_por_patterns(SEM_ETIQUETA_DIR, [f"{base}.jpg"])
+        if candidatos:
+            return candidatos[0]
+        return None
+
+    candidatos = _listar_por_patterns(
+        SEM_ETIQUETA_DIR,
+        [
+            f"{base}.jpg",
+            f"{base} - *_se*.jpg",
+        ],
+    )
+    if candidatos:
+        return candidatos[0]
+    return None
 
 
 def _append_profile(
@@ -102,7 +192,7 @@ def _ocr_digits(img: np.ndarray, config: str) -> str | None:
     return _normalizar_codigo(texto)
 
 
-def _ocr_paint(paint_path: Path) -> str | None:
+def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
     img = cv2.imread(str(paint_path))
     if img is None:
         return None
@@ -137,7 +227,11 @@ def _ocr_paint(paint_path: Path) -> str | None:
 
     chamadas = 0
     for base in candidatos:
+        if _deadline_exceeded(deadline):
+            return None
         for escala in (1.0, 1.8, 2.2, 2.8):
+            if _deadline_exceeded(deadline):
+                return None
             if escala == 1.0:
                 candidate = base
             else:
@@ -160,7 +254,7 @@ def _ocr_paint(paint_path: Path) -> str | None:
     return None
 
 
-def _ocr_paint_intensivo(paint_path: Path) -> str | None:
+def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str | None:
     img = cv2.imread(str(paint_path))
     if img is None:
         return None
@@ -183,11 +277,19 @@ def _ocr_paint_intensivo(paint_path: Path) -> str | None:
 
     chamadas = 0
     for base in variantes:
+        if _deadline_exceeded(deadline):
+            return None
         _, otsu = cv2.threshold(base, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         for cand in (base, otsu, 255 - otsu):
+            if _deadline_exceeded(deadline):
+                return None
             for escala in (2.0, 2.8, 3.2):
+                if _deadline_exceeded(deadline):
+                    return None
                 up = cv2.resize(cand, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
                 for cfg in psm_configs:
+                    if _deadline_exceeded(deadline):
+                        return None
                     codigo = _ocr_digits(up, cfg)
                     chamadas += 1
                     if codigo:
@@ -199,7 +301,7 @@ def _ocr_paint_intensivo(paint_path: Path) -> str | None:
     return None
 
 
-def _ocr_imagem_completa(caminho_img: Path) -> str | None:
+def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> str | None:
     img = cv2.imread(str(caminho_img))
     if img is None:
         return None
@@ -222,6 +324,8 @@ def _ocr_imagem_completa(caminho_img: Path) -> str | None:
 
     chamadas = 0
     for reg in regioes:
+        if _deadline_exceeded(deadline):
+            return None
         if reg.size == 0:
             continue
 
@@ -238,9 +342,15 @@ def _ocr_imagem_completa(caminho_img: Path) -> str | None:
         )
 
         for base in (clahe, otsu, 255 - otsu, adapt, 255 - adapt):
+            if _deadline_exceeded(deadline):
+                return None
             for escala in (1.5, 2.2, 3.0):
+                if _deadline_exceeded(deadline):
+                    return None
                 up = cv2.resize(base, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
                 for cfg in psm_configs:
+                    if _deadline_exceeded(deadline):
+                        return None
                     codigo = _ocr_digits(up, cfg)
                     chamadas += 1
                     if codigo:
@@ -252,7 +362,7 @@ def _ocr_imagem_completa(caminho_img: Path) -> str | None:
     return None
 
 
-def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa") -> str | None:
+def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: float | None = None) -> str | None:
     img = cv2.imread(str(caminho_img))
     if img is None:
         return None
@@ -300,6 +410,8 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa") -> str | No
 
     chamadas = 0
     for reg in regioes:
+        if _deadline_exceeded(deadline):
+            return None
         if reg.size == 0:
             continue
 
@@ -316,6 +428,8 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa") -> str | No
         )
 
         for base in (clahe, otsu, 255 - otsu, adapt, 255 - adapt):
+            if _deadline_exceeded(deadline):
+                return None
             candidatos_orientacao = [base, cv2.rotate(base, cv2.ROTATE_90_CLOCKWISE)]
             if usar_rotacao_ccw:
                 candidatos_orientacao.append(cv2.rotate(base, cv2.ROTATE_90_COUNTERCLOCKWISE))
@@ -323,9 +437,15 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa") -> str | No
                 candidatos_orientacao.append(cv2.rotate(base, cv2.ROTATE_180))
 
             for orientado in candidatos_orientacao:
+                if _deadline_exceeded(deadline):
+                    return None
                 for escala in escalas:
+                    if _deadline_exceeded(deadline):
+                        return None
                     up = cv2.resize(orientado, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
                     for cfg in psm_configs:
+                        if _deadline_exceeded(deadline):
+                            return None
                         codigo = _ocr_digits(up, cfg)
                         chamadas += 1
                         if codigo:
@@ -363,83 +483,112 @@ def _tentar_barcode_etiqueta_fallback(
     indice_global: int | None,
     total_global: int | None,
     perfil_rows: list[dict] | None,
-) -> tuple[str | None, str | None]:
+    modo: str = "all",
+    deadline: float | None = None,
+) -> tuple[str | None, str | None, dict]:
     if not etiquetas:
-        return None, None
+        return None, None, {"partial_6plus": False, "short_promissor": False}
 
-    t_simple = time.perf_counter()
-    for idx_et, etiqueta in enumerate(etiquetas, start=1):
-        if indice_global and total_global:
-            print(
-                f"[ler_codigo] lendo etiqueta {idx_et}/{len(etiquetas)} {etiqueta.name} | "
-                f"imagem {indice_global}/{total_global}"
-            )
+    info = {"partial_6plus": False, "short_promissor": False}
 
-        codigo, meta = _normalizar_resultado_barcode(
-            ler_barcode_imagem(
-                etiqueta,
-                min_digits=CODIGO_LEN_ALVO,
-                return_meta=True,
-                simple_only=True,
+    def _capturar_sinal(raw_codigo, meta):
+        texto = str(raw_codigo or "")
+        nums = DIGITS_RE.findall(texto)
+        if any(len(n) >= 6 for n in nums):
+            info["partial_6plus"] = True
+        counts = (meta or {}).get("all_counts", {}) if isinstance(meta, dict) else {}
+        for k, v in counts.items():
+            if int(v or 0) >= 1 and len(str(k)) >= 6:
+                info["short_promissor"] = True
+                break
+
+    if modo in {"all", "simple"}:
+        t_simple = time.perf_counter()
+        timeout_simple = False
+        for idx_et, etiqueta in enumerate(etiquetas, start=1):
+            if _deadline_exceeded(deadline):
+                timeout_simple = True
+                break
+            if indice_global and total_global:
+                print(
+                    f"[ler_codigo] lendo etiqueta {idx_et}/{len(etiquetas)} {etiqueta.name} | "
+                    f"imagem {indice_global}/{total_global}"
+                )
+
+            codigo, meta = _normalizar_resultado_barcode(
+                ler_barcode_imagem(
+                    etiqueta,
+                    min_digits=CODIGO_LEN_ALVO,
+                    return_meta=True,
+                    simple_only=True,
+                )
             )
+            _capturar_sinal(codigo, meta)
+            codigo_norm = _normalizar_codigo(codigo)
+            if _is_valid_candidate(codigo_norm):
+                fonte = _fonte_etiqueta_simples(meta.get("simple_stage", ""))
+                _append_profile(
+                    perfil_rows,
+                    base,
+                    "barcode_etiqueta_simples",
+                    time.perf_counter() - t_simple,
+                    fonte,
+                    "ok",
+                    early_stop="True",
+                )
+                return codigo_norm, fonte, info
+
+        _append_profile(
+            perfil_rows,
+            base,
+            "barcode_etiqueta_simples",
+            time.perf_counter() - t_simple,
+            "",
+            "timeout" if timeout_simple else "falhou",
+            early_stop="False",
         )
-        codigo_norm = _normalizar_codigo(codigo)
-        if codigo_norm:
-            fonte = _fonte_etiqueta_simples(meta.get("simple_stage", ""))
-            _append_profile(
-                perfil_rows,
-                base,
-                "barcode_etiqueta_simples",
-                time.perf_counter() - t_simple,
-                fonte,
-                "ok",
-                early_stop="True",
+
+    if modo in {"all", "intensivo"}:
+        t_int = time.perf_counter()
+        timeout_int = False
+        for idx_et, etiqueta in enumerate(etiquetas, start=1):
+            if _deadline_exceeded(deadline):
+                timeout_int = True
+                break
+            if indice_global and total_global:
+                print(
+                    f"[ler_codigo] etiqueta intensivo {idx_et}/{len(etiquetas)} {etiqueta.name} | "
+                    f"imagem {indice_global}/{total_global}"
+                )
+
+            codigo, meta = _normalizar_resultado_barcode(
+                ler_barcode_imagem(etiqueta, modo="intensivo", min_digits=CODIGO_LEN_ALVO, return_meta=True)
             )
-            return codigo_norm, fonte
+            _capturar_sinal(codigo, meta)
+            codigo_norm = _normalizar_codigo(codigo)
+            if _is_valid_candidate(codigo_norm):
+                _append_profile(
+                    perfil_rows,
+                    base,
+                    "barcode_etiqueta_intensivo",
+                    time.perf_counter() - t_int,
+                    "etiqueta_intensivo",
+                    "ok",
+                    early_stop="True",
+                )
+                return codigo_norm, "etiqueta_intensivo", info
 
-    _append_profile(
-        perfil_rows,
-        base,
-        "barcode_etiqueta_simples",
-        time.perf_counter() - t_simple,
-        "",
-        "falhou",
-        early_stop="False",
-    )
+        _append_profile(
+            perfil_rows,
+            base,
+            "barcode_etiqueta_intensivo",
+            time.perf_counter() - t_int,
+            "",
+            "timeout" if timeout_int else "falhou",
+            early_stop="False",
+        )
 
-    t_int = time.perf_counter()
-    for idx_et, etiqueta in enumerate(etiquetas, start=1):
-        if indice_global and total_global:
-            print(
-                f"[ler_codigo] etiqueta intensivo {idx_et}/{len(etiquetas)} {etiqueta.name} | "
-                f"imagem {indice_global}/{total_global}"
-            )
-
-        codigo = ler_barcode_imagem(etiqueta, modo="intensivo", min_digits=CODIGO_LEN_ALVO)
-        codigo_norm = _normalizar_codigo(codigo)
-        if codigo_norm:
-            _append_profile(
-                perfil_rows,
-                base,
-                "barcode_etiqueta_intensivo",
-                time.perf_counter() - t_int,
-                "etiqueta_intensivo",
-                "ok",
-                early_stop="True",
-            )
-            return codigo_norm, "etiqueta_intensivo"
-
-    _append_profile(
-        perfil_rows,
-        base,
-        "barcode_etiqueta_intensivo",
-        time.perf_counter() - t_int,
-        "",
-        "falhou",
-        early_stop="False",
-    )
-
-    return None, None
+    return None, None, info
 
 
 def ler_codigo_unico(
@@ -453,175 +602,178 @@ def ler_codigo_unico(
     Regra do projeto: só existe 1 código por imagem (ou paint ou etiqueta).
     """
 
-    etiquetas = sorted(ETI_DIR.glob(f"{base}_etiqueta_*.jpg"))
+    item_deadline = _stage_deadline(None, CODE_READ_TIMEOUT_ITEM_S)
+    etiquetas = _listar_etiquetas(base)
+    paints = _listar_paints(base)
     candidatos_etiqueta: list[str] = []
-    candidatos_etiqueta_curtos: Counter[str] = Counter()
 
-    barcode_sinais_fortes = 0
-    barcode_sinais_fracos = 0
+    # estágio 1: simples (barato e confiável)
+    stage_simple_deadline = _stage_deadline(item_deadline, CODE_READ_TIMEOUT_SIMPLE_S)
+    codigo_eti_s, fonte_eti_s, info_sinal = _tentar_barcode_etiqueta_fallback(
+        base,
+        etiquetas,
+        indice_global,
+        total_global,
+        perfil_rows,
+        modo="simple",
+        deadline=stage_simple_deadline,
+    )
+    if _is_valid_candidate(codigo_eti_s):
+        return codigo_eti_s, fonte_eti_s or "etiqueta_raw"
 
-    if PRIORITIZE_BARCODE_FIRST and etiquetas:
-        codigo_eti, fonte_eti = _tentar_barcode_etiqueta_fallback(
-            base,
-            etiquetas,
-            indice_global,
-            total_global,
-            perfil_rows,
-        )
-        if codigo_eti:
-            return codigo_eti, fonte_eti or "etiqueta_raw"
-
-    # 1) Paint (OCR)
-    paints = sorted(PAINTS_DIR.glob(f"{base}_paint_*.jpg"))
     t_paint = time.perf_counter()
+    timeout_simple = False
     for idx_paint, paint in enumerate(paints, start=1):
+        if _deadline_exceeded(stage_simple_deadline):
+            timeout_simple = True
+            break
         if indice_global and total_global:
             print(
                 f"[ler_codigo] lendo paint {idx_paint}/{len(paints)} {paint.name} | "
                 f"imagem {indice_global}/{total_global}"
             )
-        codigo = _ocr_paint(paint)
+        codigo = _ocr_paint(paint, deadline=stage_simple_deadline)
         if codigo:
             codigo_norm = _normalizar_codigo(codigo)
-            if codigo_norm:
-                _append_profile(perfil_rows, base, "ocr_paint", time.perf_counter() - t_paint, "paint", "ok")
+            if _is_valid_candidate(codigo_norm):
+                _append_profile(perfil_rows, base, "ocr_paint", time.perf_counter() - t_paint, "paint", "ok", early_stop="True")
                 return codigo_norm, "paint"
-    _append_profile(perfil_rows, base, "ocr_paint", time.perf_counter() - t_paint, "", "falhou")
+    _append_profile(
+        perfil_rows,
+        base,
+        "ocr_paint",
+        time.perf_counter() - t_paint,
+        "",
+        "timeout" if timeout_simple else "falhou",
+        early_stop="False",
+    )
 
-    t_paint_int = time.perf_counter()
-    for idx_paint, paint in enumerate(paints, start=1):
-        if not ENABLE_PAINT_INTENSIVO:
-            break
-        if indice_global and total_global:
-            print(
-                f"[ler_codigo] paint intensivo {idx_paint}/{len(paints)} {paint.name} | "
-                f"imagem {indice_global}/{total_global}"
-            )
-        codigo = _ocr_paint_intensivo(paint)
-        if codigo:
-            codigo_norm = _normalizar_codigo(codigo)
-            if codigo_norm:
-                _append_profile(perfil_rows, base, "ocr_paint_intensivo", time.perf_counter() - t_paint_int, "paint_intensivo", "ok")
-                return codigo_norm, "paint_intensivo"
-    if ENABLE_PAINT_INTENSIVO:
-        _append_profile(perfil_rows, base, "ocr_paint_intensivo", time.perf_counter() - t_paint_int, "", "falhou")
+    has_partial_6plus = bool(info_sinal.get("partial_6plus", False))
+    has_short_candidate = bool(info_sinal.get("short_promissor", False))
+    sinal_util = _has_useful_signal(etiquetas, paints, has_partial_6plus, has_short_candidate)
 
-    # 2) Etiqueta (barcode/ocr) com consenso mínimo
-    if not PRIORITIZE_BARCODE_FIRST:
-        codigo_eti, fonte_eti = _tentar_barcode_etiqueta_fallback(
+    # estágio 2: intensivo (somente com sinal útil)
+    if sinal_util and not _deadline_exceeded(item_deadline):
+        stage_int_deadline = _stage_deadline(item_deadline, CODE_READ_TIMEOUT_INTENSIVO_S)
+        codigo_eti_i, fonte_eti_i, info_sinal_i = _tentar_barcode_etiqueta_fallback(
             base,
             etiquetas,
             indice_global,
             total_global,
             perfil_rows,
+            modo="intensivo",
+            deadline=stage_int_deadline,
         )
-        if codigo_eti:
-            return codigo_eti, fonte_eti or "etiqueta_raw"
+        if _is_valid_candidate(codigo_eti_i):
+            return codigo_eti_i, fonte_eti_i or "etiqueta_intensivo"
 
-    nivel_ocr_etiqueta = "baixa"
-    if OCR_ETIQUETA_ADAPTIVE:
-        if barcode_sinais_fortes >= 2:
-            nivel_ocr_etiqueta = "alta"
-        elif (barcode_sinais_fortes + barcode_sinais_fracos) > 0:
-            nivel_ocr_etiqueta = "media"
-        print(f"[ler_codigo] ocr_etiqueta_adaptive nivel={nivel_ocr_etiqueta} base={base}")
+        has_partial_6plus = has_partial_6plus or bool(info_sinal_i.get("partial_6plus", False))
+        has_short_candidate = has_short_candidate or bool(info_sinal_i.get("short_promissor", False))
 
-    t_ocr_eti = time.perf_counter()
-    for idx_et, etiqueta in enumerate(etiquetas, start=1):
-        if indice_global and total_global:
-            print(
-                f"[ler_codigo] ocr etiqueta {idx_et}/{len(etiquetas)} {etiqueta.name} | "
-                f"imagem {indice_global}/{total_global}"
-            )
-        codigo = _ocr_etiqueta(etiqueta, nivel_confianca=nivel_ocr_etiqueta)
-        if codigo:
-            codigo_norm = _normalizar_codigo(codigo)
-            if codigo_norm:
-                candidatos_etiqueta.append(codigo_norm)
-
-                min_votos_parcial = MIN_VOTOS_ETIQUETA
-                if len(candidatos_etiqueta) <= 1:
-                    min_votos_parcial = 1
-
-                parcial = _selecionar_por_votos(candidatos_etiqueta, min_votos=min_votos_parcial)
-                if parcial:
+        t_paint_int = time.perf_counter()
+        timeout_paint_int = False
+        for idx_paint, paint in enumerate(paints, start=1):
+            if not ENABLE_PAINT_INTENSIVO:
+                break
+            if _deadline_exceeded(stage_int_deadline):
+                timeout_paint_int = True
+                break
+            if indice_global and total_global:
+                print(
+                    f"[ler_codigo] paint intensivo {idx_paint}/{len(paints)} {paint.name} | "
+                    f"imagem {indice_global}/{total_global}"
+                )
+            codigo = _ocr_paint_intensivo(paint, deadline=stage_int_deadline)
+            if codigo:
+                codigo_norm = _normalizar_codigo(codigo)
+                if _is_valid_candidate(codigo_norm):
                     _append_profile(
                         perfil_rows,
                         base,
-                        "ocr_etiqueta",
-                        time.perf_counter() - t_ocr_eti,
-                        "etiqueta_ocr",
-                        "ok_early_stop",
-                        nivel_ocr=nivel_ocr_etiqueta,
-                        modo_adaptive=str(bool(OCR_ETIQUETA_ADAPTIVE)),
+                        "ocr_paint_intensivo",
+                        time.perf_counter() - t_paint_int,
+                        "paint_intensivo",
+                        "ok",
                         early_stop="True",
                     )
-                    return parcial, "etiqueta_ocr"
-
-    _append_profile(
-        perfil_rows,
-        base,
-        "ocr_etiqueta",
-        time.perf_counter() - t_ocr_eti,
-        "",
-        "fim",
-        nivel_ocr=nivel_ocr_etiqueta,
-        modo_adaptive=str(bool(OCR_ETIQUETA_ADAPTIVE)),
-        early_stop="False",
-    )
-
-    # Sem consenso adicional aqui: OCR é fallback real e retorna no primeiro válido.
-
-    # 3) Fallback em imagem completa (quando crop falha)
-    if ENABLE_OCR_IMAGEM_COMPLETA:
-        sem_etiqueta = SEM_ETIQUETA_DIR / f"{base}.jpg"
-        if sem_etiqueta.exists():
-            codigo = _ocr_imagem_completa(sem_etiqueta)
-            if codigo:
-                codigo_norm = _normalizar_codigo(codigo)
-                if codigo_norm:
-                    return codigo_norm, "ocr_sem_etiqueta"
-
-    original = ORIGINAIS_DIR / f"{base}.jpg"
-    if original.exists():
-        codigo, _ = _normalizar_resultado_barcode(
-            ler_barcode_imagem(original, modo="intensivo", min_digits=CODIGO_LEN_ALVO)
-        )
-        if codigo:
-            codigo_norm = _normalizar_codigo(codigo)
-            if codigo_norm:
-                # barcode no original é mais frágil; usa apenas se também houve concordância da etiqueta
-                if codigo_norm in candidatos_etiqueta:
-                    return codigo_norm, "barcode_original_consenso"
-
-        if ALLOW_SHORT_BARCODE and candidatos_etiqueta_curtos:
-            _, meta_original = _normalizar_resultado_barcode(
-                ler_barcode_imagem(
-                    original,
-                    modo="intensivo",
-                    min_digits=SHORT_BARCODE_MIN_DIGITS,
-                    return_meta=True,
-                )
+                    return codigo_norm, "paint_intensivo"
+        if ENABLE_PAINT_INTENSIVO:
+            _append_profile(
+                perfil_rows,
+                base,
+                "ocr_paint_intensivo",
+                time.perf_counter() - t_paint_int,
+                "",
+                "timeout" if timeout_paint_int else "falhou",
+                early_stop="False",
             )
-            counts_original = meta_original.get("all_counts", {})
-            candidatos_cross: list[tuple[str, int, int]] = []
-            for cod, qtd_et in candidatos_etiqueta_curtos.items():
-                if len(cod) < SHORT_BARCODE_MIN_DIGITS or len(cod) >= CODIGO_LEN_ALVO:
-                    continue
-                qtd_or = int(counts_original.get(cod, 0))
-                if qtd_or >= 1 and qtd_et >= 1:
-                    candidatos_cross.append((cod, qtd_et, qtd_or))
+    elif not sinal_util:
+        _append_profile(
+            perfil_rows,
+            base,
+            "gate_intensivo",
+            0.0,
+            "",
+            "bloqueado_sem_evidencia",
+            early_stop="False",
+        )
 
-            if candidatos_cross:
-                melhor_cross = sorted(candidatos_cross, key=lambda x: (x[1] + x[2], x[1], x[2], len(x[0])), reverse=True)[0]
-                return melhor_cross[0], "barcode_curto_cross"
+    # estágio 3: OCR (somente com sinal útil)
+    sinal_util = _has_useful_signal(etiquetas, paints, has_partial_6plus, has_short_candidate)
+    if sinal_util and not _deadline_exceeded(item_deadline):
+        stage_ocr_deadline = _stage_deadline(item_deadline, CODE_READ_TIMEOUT_OCR_S)
+        nivel_ocr_etiqueta = "baixa"
 
-        if ENABLE_OCR_IMAGEM_COMPLETA:
-            codigo = _ocr_imagem_completa(original)
+        t_ocr_eti = time.perf_counter()
+        timeout_ocr = False
+        for idx_et, etiqueta in enumerate(etiquetas, start=1):
+            if _deadline_exceeded(stage_ocr_deadline):
+                timeout_ocr = True
+                break
+            if indice_global and total_global:
+                print(
+                    f"[ler_codigo] ocr etiqueta {idx_et}/{len(etiquetas)} {etiqueta.name} | "
+                    f"imagem {indice_global}/{total_global}"
+                )
+            codigo = _ocr_etiqueta(etiqueta, nivel_confianca=nivel_ocr_etiqueta, deadline=stage_ocr_deadline)
             if codigo:
                 codigo_norm = _normalizar_codigo(codigo)
-                if codigo_norm:
-                    return codigo_norm, "ocr_original"
+                if _is_valid_candidate(codigo_norm):
+                    candidatos_etiqueta.append(codigo_norm)
+
+                    min_votos_parcial = MIN_VOTOS_ETIQUETA
+                    if len(candidatos_etiqueta) <= 1:
+                        min_votos_parcial = 1
+
+                    parcial = _selecionar_por_votos(candidatos_etiqueta, min_votos=min_votos_parcial)
+                    if parcial:
+                        _append_profile(
+                            perfil_rows,
+                            base,
+                            "ocr_etiqueta",
+                            time.perf_counter() - t_ocr_eti,
+                            "etiqueta_ocr",
+                            "ok_early_stop",
+                            nivel_ocr=nivel_ocr_etiqueta,
+                            modo_adaptive="False",
+                            early_stop="True",
+                        )
+                        return parcial, "etiqueta_ocr"
+
+        _append_profile(
+            perfil_rows,
+            base,
+            "ocr_etiqueta",
+            time.perf_counter() - t_ocr_eti,
+            "",
+            "timeout" if timeout_ocr else "fim",
+            nivel_ocr=nivel_ocr_etiqueta,
+            modo_adaptive="False",
+            early_stop="False",
+        )
+
+    if _deadline_exceeded(item_deadline):
+        _append_profile(perfil_rows, base, "timeout_item", CODE_READ_TIMEOUT_ITEM_S, "", "timeout_item", early_stop="False")
 
     # 4) Fallback: nome já é número
     if base.isdigit() and len(base) == CODIGO_LEN_ALVO:
