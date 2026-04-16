@@ -25,13 +25,13 @@ OCR_TIMEOUT_SECONDS = 1
 MAX_OCR_CALLS_PAINT = 12 if CODE_READER_FAST else 40
 MAX_OCR_CALLS_PAINT_INTENSIVO = 12 if CODE_READER_FAST else 36
 MAX_OCR_CALLS_IMAGEM_COMPLETA = 10 if CODE_READER_FAST else 24
-ENABLE_OCR_IMAGEM_COMPLETA = False
+ENABLE_OCR_IMAGEM_COMPLETA = True
 MAX_OCR_CALLS_ETIQUETA = 60
 MIN_VOTOS_ETIQUETA = 2
 ALLOW_SHORT_BARCODE = os.getenv("ALLOW_SHORT_BARCODE", "0").strip().lower() in {"1", "true", "yes", "on"}
 SHORT_BARCODE_MIN_DIGITS = 8
 SHORT_BARCODE_MIN_CONSENSUS = 2
-ENABLE_PAINT_INTENSIVO = os.getenv("ENABLE_PAINT_INTENSIVO", "0").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_PAINT_INTENSIVO = os.getenv("ENABLE_PAINT_INTENSIVO", "1").strip().lower() in {"1", "true", "yes", "on"}
 PRIORITIZE_BARCODE_FIRST = os.getenv("PRIORITIZE_BARCODE_FIRST", "0").strip().lower() in {"1", "true", "yes", "on"}
 OCR_ETIQUETA_ADAPTIVE = os.getenv("OCR_ETIQUETA_ADAPTIVE", "0").strip().lower() in {"1", "true", "yes", "on"}
 LER_CODIGO_CANONICAL_ONLY = os.getenv("LER_CODIGO_CANONICAL_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -61,7 +61,13 @@ def _stage_deadline(item_deadline: float | None, stage_budget_s: float) -> float
 
 
 def _is_valid_candidate(codigo: str | None) -> bool:
-    return bool(codigo and len(codigo) == CODIGO_LEN_ALVO and codigo.isdigit())
+    if not codigo:
+        return False
+    if codigo.isdigit() and len(codigo) == CODIGO_LEN_ALVO:
+        return True
+    if re.fullmatch(r"[A-Z0-9]{7,10}", codigo) and sum(ch.isdigit() for ch in codigo) >= 7:
+        return True
+    return False
 
 
 def _has_useful_signal(
@@ -70,7 +76,7 @@ def _has_useful_signal(
     has_partial_6plus: bool,
     has_short_candidate: bool,
 ) -> bool:
-    return bool(has_partial_6plus or has_short_candidate)
+    return bool(has_partial_6plus or has_short_candidate or paints)
 
 
 def _listar_por_patterns(folder: Path, patterns: list[str]) -> list[Path]:
@@ -126,6 +132,20 @@ def _buscar_sem_etiqueta(base: str) -> Path | None:
     return None
 
 
+def _buscar_original(base: str) -> Path | None:
+    candidatos = _listar_por_patterns(
+        ORIGINAIS_DIR,
+        [
+            f"{base}.jpg",
+            f"{base}.jpeg",
+            f"{base}.png",
+        ],
+    )
+    if candidatos:
+        return candidatos[0]
+    return None
+
+
 def _append_profile(
     perfil_rows,
     base: str,
@@ -157,18 +177,29 @@ def _normalizar_codigo(texto: str | None) -> str | None:
     if not texto:
         return None
 
-    candidatos = DIGITS_RE.findall(texto)
-    if not candidatos:
+    texto_limpo = texto.strip().upper().replace(" ", "").replace("\n", "")
+    if not texto_limpo:
         return None
 
-    validos = [c for c in candidatos if len(c) == CODIGO_LEN_ALVO]
-    if not validos:
-        return None
+    # Prioriza código numérico completo de 10 dígitos
+    candidatos_digits = DIGITS_RE.findall(texto_limpo)
+    validos_digits = [c for c in candidatos_digits if len(c) == CODIGO_LEN_ALVO]
+    if validos_digits:
+        contagem = Counter(validos_digits)
+        validos_digits.sort(key=lambda c: (-contagem[c], c))
+        return validos_digits[0]
 
-    # retorna o mais frequente na extração local
-    contagem = Counter(validos)
-    validos.sort(key=lambda c: (-contagem[c], c))
-    return validos[0]
+    # Fallback para códigos alfanuméricos típicos de paint (ex: CR3904506)
+    alnum_candidatos = re.findall(r"[A-Z0-9]{7,10}", texto_limpo)
+    for candidato in alnum_candidatos:
+        if sum(ch.isdigit() for ch in candidato) < 7:
+            continue
+        if candidato.isdigit():
+            # não aceitar números curtos sem prefixo; só aceitamos numérico completo
+            continue
+        return candidato
+
+    return None
 
 
 def _selecionar_por_votos(candidatos: list[str], min_votos: int = 2) -> str | None:
@@ -189,7 +220,9 @@ def _ocr_digits(img: np.ndarray, config: str) -> str | None:
         return None
 
     texto = texto.strip().replace(" ", "").replace("\n", "")
-    return _normalizar_codigo(texto)
+    if not texto:
+        return None
+    return texto.upper()
 
 
 def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
@@ -213,7 +246,7 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
     )
     nitida = cv2.addWeighted(clahe, 1.7, blur, -0.7, 0)
 
-    cfg = "--psm 7 -c tessedit_char_whitelist=0123456789"
+    cfg = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
     candidatos = [
         gray,
@@ -270,9 +303,9 @@ def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str
         variantes.append(cv2.morphologyEx(clahe, cv2.MORPH_OPEN, kernel, iterations=1))
 
     psm_configs = [
-        "--psm 7 -c tessedit_char_whitelist=0123456789",
-        "--psm 6 -c tessedit_char_whitelist=0123456789",
-        "--psm 11 -c tessedit_char_whitelist=0123456789",
+        "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     ]
 
     chamadas = 0
@@ -774,6 +807,34 @@ def ler_codigo_unico(
 
     if _deadline_exceeded(item_deadline):
         _append_profile(perfil_rows, base, "timeout_item", CODE_READ_TIMEOUT_ITEM_S, "", "timeout_item", early_stop="False")
+
+    if ENABLE_OCR_IMAGEM_COMPLETA:
+        original = _buscar_original(base)
+        if original and not _deadline_exceeded(item_deadline):
+            t_full = time.perf_counter()
+            codigo = _ocr_imagem_completa(original, deadline=item_deadline)
+            if codigo:
+                codigo_norm = _normalizar_codigo(codigo)
+                if _is_valid_candidate(codigo_norm):
+                    _append_profile(
+                        perfil_rows,
+                        base,
+                        "ocr_imagem_completa",
+                        time.perf_counter() - t_full,
+                        "imagem_completa",
+                        "ok",
+                        early_stop="True",
+                    )
+                    return codigo_norm, "imagem_completa"
+            _append_profile(
+                perfil_rows,
+                base,
+                "ocr_imagem_completa",
+                time.perf_counter() - t_full,
+                "",
+                "falhou",
+                early_stop="False",
+            )
 
     # 4) Fallback: nome já é número
     if base.isdigit() and len(base) == CODIGO_LEN_ALVO:

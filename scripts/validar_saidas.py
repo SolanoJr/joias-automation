@@ -9,9 +9,9 @@ import pytesseract
 
 ROOT = Path(".")
 OUT = ROOT / "output"
-PAINTS = OUT / "paints"
-ETIQUETAS = OUT / "etiquetas"
-SEM_ETIQUETA = OUT / "sem_etiqueta"
+PAINTS = OUT / "2_paints"
+ETIQUETAS = OUT / "1_etiquetas"
+SEM_ETIQUETA = OUT / "3_sem_etiqueta"
 BASELINE_PATH = OUT / "analysis" / "baseline_validacao.json"
 
 

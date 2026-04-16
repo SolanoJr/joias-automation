@@ -1,15 +1,29 @@
 from pathlib import Path
+import os
 
 from PIL import Image, ImageOps
 
 
-INPUT_DIR = Path("output/sem_etiqueta")
-OUTPUT_DIR = Path("output/quadrado_manual")
+INPUT_DIR = Path("output/3_sem_etiqueta")
+OUTPUT_DIR = Path("output/4_quadrado_manual")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SIZE = 1200
 CONTENT_RATIO = 0.88
 LIMPAR_DESTINO = True
+PREP_SKIP_IF_UPTODATE = os.getenv("PREP_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
+PREP_SKIP_BY_EXISTENCE = os.getenv("PREP_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_canonical_stem(stem: str) -> bool:
+    s = (stem or "").strip()
+    if not s:
+        return False
+    if " - " in s:
+        return False
+    if s.endswith("_se"):
+        return False
+    return True
 
 
 def preparar(imagem_path: Path):
@@ -41,17 +55,30 @@ def main():
         for p in OUTPUT_DIR.glob("*.jpg"):
             p.unlink(missing_ok=True)
 
-    imgs = sorted(INPUT_DIR.glob("*.jpg"))
+    imgs = sorted(p for p in INPUT_DIR.glob("*.jpg") if _is_canonical_stem(p.stem))
     if not imgs:
         print(f"ERRO: nenhuma imagem em {INPUT_DIR}")
         return
 
     ok = 0
     for p in imgs:
+        out_path = OUTPUT_DIR / p.name
+        if PREP_SKIP_BY_EXISTENCE and out_path.exists():
+            ok += 1
+            continue
+
+        if PREP_SKIP_IF_UPTODATE and out_path.exists():
+            try:
+                if out_path.stat().st_mtime >= p.stat().st_mtime:
+                    ok += 1
+                    continue
+            except Exception:
+                pass
+
         out = preparar(p)
         if out is None:
             continue
-        out.save(OUTPUT_DIR / p.name, quality=95)
+        out.save(out_path, quality=95)
         ok += 1
 
     print(f"Quadrado manual OK: {ok}/{len(imgs)}")

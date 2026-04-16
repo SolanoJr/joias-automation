@@ -1,4 +1,5 @@
 import logging
+import os
 import numpy as np
 import cv2
 from rembg import new_session, remove
@@ -10,9 +11,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 USE_ORIGINAL_INPUT = False
 ORIGINAL_INPUT_DIR = Path("input_raw/fotos_originais")
-QUADRADO_MANUAL_INPUT_DIR = Path("output/quadrado_manual")
+QUADRADO_MANUAL_INPUT_DIR = Path("output/4_quadrado_manual")
 INPUT_DIR = ORIGINAL_INPUT_DIR if USE_ORIGINAL_INPUT else QUADRADO_MANUAL_INPUT_DIR
-OUTPUT_DIR = Path("output/segmentado_rembg")
+OUTPUT_DIR = Path("output/5_segmentado_rembg")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SIZE = 1024
@@ -30,6 +31,23 @@ MIN_COMPONENT_AREA_RATIO = 0.010
 MANTER_APENAS_MAIOR_COMPONENTE = False
 
 session = new_session("isnet-general-use")
+FAST_MODE = os.getenv("SEG_FAST_MODE", "1").strip().lower() in {"1", "true", "yes", "on"}
+FAST_MAX_SIDE = int(os.getenv("SEG_FAST_MAX_SIDE", "1024"))
+SEG_ADAPTIVE_RETRY = os.getenv("SEG_ADAPTIVE_RETRY", "1").strip().lower() in {"1", "true", "yes", "on"}
+SEG_ADAPTIVE_RETRY_MAX_SIDE = int(os.getenv("SEG_ADAPTIVE_RETRY_MAX_SIDE", "1600"))
+SEG_SKIP_IF_UPTODATE = os.getenv("SEG_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
+SEG_SKIP_BY_EXISTENCE = os.getenv("SEG_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_canonical_stem(stem: str) -> bool:
+    s = (stem or "").strip()
+    if not s:
+        return False
+    if " - " in s:
+        return False
+    if s.endswith("_qm"):
+        return False
+    return True
 
 
 def _to_rgba_image(rembg_output) -> Image.Image | None:
@@ -81,28 +99,42 @@ def _renderizar_fallback_original(imagem_path: Path, imagem_atual: Image.Image) 
 
     return _renderizar_no_fundo_branco(imagem_atual)
 
-def processar(imagem_path: Path):
-    try:
-        img = Image.open(imagem_path)
-        img = ImageOps.exif_transpose(img)  # corrige imagem deitada
-        img = img.convert("RGBA")
-    except Exception as e:
-        logging.error(f"Erro ao abrir {imagem_path.name}: {e}")
-        return None
 
+def _downscale_rapido(img: Image.Image, max_side_override: int | None = None) -> Image.Image:
+    if not FAST_MODE:
+        return img
+
+    max_side = FAST_MAX_SIDE if max_side_override is None else int(max_side_override)
+    if max_side <= 0:
+        return img
+
+    largura, altura = img.size
+    maior_lado = max(largura, altura)
+    if maior_lado <= max_side:
+        return img
+
+    escala = max_side / float(maior_lado)
+    novo_w = max(1, int(largura * escala))
+    novo_h = max(1, int(altura * escala))
+    return img.resize((novo_w, novo_h), Image.Resampling.LANCZOS)
+
+
+def _segmentar_e_renderizar(
+    imagem_path: Path,
+    img_original: Image.Image,
+    max_side_tentativa: int,
+) -> tuple[Image.Image | None, str | None]:
     try:
-        rembg_output = remove(img, session=session)
+        img_para_rembg = _downscale_rapido(img_original, max_side_override=max_side_tentativa)
+        rembg_output = remove(img_para_rembg, session=session)
     except Exception as e:
         logging.error(f"Erro no rembg {imagem_path.name}: {e}")
-        return None
+        return None, "erro_rembg"
 
     sem_fundo = _to_rgba_image(rembg_output)
     if sem_fundo is None:
         logging.error(f"Tipo de saída do rembg não suportado em {imagem_path.name}")
-        if FALLBACK_ORIGINAL_SE_FALHAR:
-            logging.warning(f"Fallback original em {imagem_path.name}")
-            return _renderizar_fallback_original(imagem_path, img)
-        return None
+        return None, "saida_nao_suportada"
 
     arr = np.array(sem_fundo)
     alpha = arr[:, :, 3]
@@ -111,7 +143,6 @@ def processar(imagem_path: Path):
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.dilate(mask.astype(np.uint8), kernel, iterations=DILATE_ITERATIONS).astype(bool)
 
-    # opcional: mantém apenas o maior componente conectado
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
     if MANTER_APENAS_MAIOR_COMPONENTE and num_labels > 1:
         areas = stats[1:, cv2.CC_STAT_AREA]
@@ -121,43 +152,24 @@ def processar(imagem_path: Path):
         comp_ratio = maior_area / float(total_area)
 
         if comp_ratio < MIN_COMPONENT_AREA_RATIO:
-            logging.warning(
-                f"Componente principal muito pequeno em {imagem_path.name} (comp={comp_ratio:.4f}); usando fallback original"
-            )
-            if FALLBACK_ORIGINAL_SE_FALHAR:
-                return _renderizar_fallback_original(imagem_path, img)
-            return None
+            return None, f"componente_pequeno({comp_ratio:.4f})"
 
         mask = labels == maior_idx
 
     coords = np.column_stack(np.where(mask))
     if coords.size == 0:
-        logging.warning(f"Nada detectado em {imagem_path.name}")
-        if FALLBACK_ORIGINAL_SE_FALHAR:
-            logging.warning(f"Fallback original em {imagem_path.name}")
-            return _renderizar_fallback_original(imagem_path, img)
-        return None
+        return None, "nada_detectado"
 
     foreground_ratio = float(mask.mean())
     if foreground_ratio < MIN_FOREGROUND_RATIO:
-        logging.warning(
-            f"Máscara muito pequena em {imagem_path.name} (ratio={foreground_ratio:.4f}); usando fallback original"
-        )
-        if FALLBACK_ORIGINAL_SE_FALHAR:
-            return _renderizar_fallback_original(imagem_path, img)
-        return None
+        return None, f"mascara_pequena({foreground_ratio:.4f})"
 
     y1, x1 = coords.min(axis=0)
     y2, x2 = coords.max(axis=0)
 
     bbox_area_ratio = ((x2 - x1 + 1) * (y2 - y1 + 1)) / float(arr.shape[0] * arr.shape[1])
     if bbox_area_ratio < MIN_BBOX_AREA_RATIO:
-        logging.warning(
-            f"BBox muito pequena em {imagem_path.name} (bbox={bbox_area_ratio:.4f}); usando fallback original"
-        )
-        if FALLBACK_ORIGINAL_SE_FALHAR:
-            return _renderizar_fallback_original(imagem_path, img)
-        return None
+        return None, f"bbox_pequena({bbox_area_ratio:.4f})"
 
     margem = int(min(arr.shape[:2]) * MARGIN_RATIO)
     margem = max(MARGIN_MIN, min(MARGIN_MAX, margem))
@@ -168,7 +180,6 @@ def processar(imagem_path: Path):
     y2 = min(arr.shape[0], y2 + margem + 1)
 
     joia = sem_fundo.crop((x1, y1, x2, y2))
-
     max_size = int(SIZE * MAX_SCALE)
     joia.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
@@ -177,22 +188,73 @@ def processar(imagem_path: Path):
     y = (SIZE - joia.height) // 2
     fundo.paste(joia, (x, y), joia)
 
-    return fundo.convert("RGB")
+    return fundo.convert("RGB"), None
+
+def processar(imagem_path: Path):
+    try:
+        img = Image.open(imagem_path)
+        img = ImageOps.exif_transpose(img)  # corrige imagem deitada
+        img = img.convert("RGBA")
+    except Exception as e:
+        logging.error(f"Erro ao abrir {imagem_path.name}: {e}")
+        return None
+
+    tentativas = [FAST_MAX_SIDE]
+    if SEG_ADAPTIVE_RETRY and FAST_MODE and SEG_ADAPTIVE_RETRY_MAX_SIDE > FAST_MAX_SIDE:
+        tentativas.append(SEG_ADAPTIVE_RETRY_MAX_SIDE)
+
+    ultimo_motivo = None
+    for i, max_side in enumerate(tentativas, start=1):
+        out, motivo = _segmentar_e_renderizar(imagem_path, img, max_side)
+        if out is not None:
+            if i > 1:
+                logging.info(
+                    f"Recuperado em retry {i}/{len(tentativas)} para {imagem_path.name} (max_side={max_side})"
+                )
+            return out
+
+        ultimo_motivo = motivo or "falha"
+        if i < len(tentativas):
+            logging.info(
+                f"Retry de segmentação para {imagem_path.name}: motivo={ultimo_motivo} -> max_side={tentativas[i]}"
+            )
+
+    if FALLBACK_ORIGINAL_SE_FALHAR:
+        logging.warning(f"Fallback original em {imagem_path.name} (motivo final: {ultimo_motivo})")
+        return _renderizar_fallback_original(imagem_path, img)
+    return None
 
 def main():
-    imgs = list(INPUT_DIR.glob("*.jpg"))
+    imgs = [p for p in INPUT_DIR.glob("*.jpg") if _is_canonical_stem(p.stem)]
     if not imgs:
         logging.error(f"Nenhuma imagem em {INPUT_DIR}")
         return
 
-    for p in imgs:
-        logging.info(f"Processando {p.name}")
+    total = len(imgs)
+    if FAST_MODE:
+        logging.info(f"Modo rápido de segmentação ativo (FAST_MAX_SIDE={FAST_MAX_SIDE})")
+
+    for idx, p in enumerate(imgs, start=1):
+        out_path = OUTPUT_DIR / p.name
+        if SEG_SKIP_BY_EXISTENCE and out_path.exists():
+            logging.info(f"Processando [{idx}/{total}] {p.name} (cache_hit: segment pulado por existência)")
+            continue
+
+        if SEG_SKIP_IF_UPTODATE and out_path.exists():
+            try:
+                if out_path.stat().st_mtime >= p.stat().st_mtime:
+                    logging.info(f"Processando [{idx}/{total}] {p.name} (cache_hit: segment pulado)")
+                    continue
+            except Exception:
+                pass
+
+        logging.info(f"Processando [{idx}/{total}] {p.name}")
         out = processar(p)
         if out is None:
             logging.warning(f"Falhou: {p.name}")
             continue
-        out.save(OUTPUT_DIR / p.name, quality=95)
-        logging.info(f"OK -> {OUTPUT_DIR / p.name}")
+        out.save(out_path, quality=95)
+        logging.info(f"OK -> {out_path}")
 
 if __name__ == "__main__":
     main()

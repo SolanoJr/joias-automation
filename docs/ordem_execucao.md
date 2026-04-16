@@ -19,5 +19,25 @@ Geradas automaticamente pelo script [scripts/organizar_pastas_numeradas.py](scri
 - [output/6_final](output/6_final)  <- [output/final](output/final)
 
 ## Observação
-- O pipeline continua usando os caminhos canônicos (`output/etiquetas`, `output/paints`, etc.) para manter compatibilidade.
-- As pastas numeradas são uma visualização organizada da mesma saída final.
+- O pipeline principal usa os scripts numerados (`1_...` até `6_...`) e também as pastas numeradas (`output/1_*` até `output/6_*`).
+- Os caminhos antigos sem enumeração não são mais a rota principal do fluxo.
+
+## Convenção de nome (intermediárias)
+- Regra principal: `nome_inicial - nome_final+sufixo.jpg` nas pastas `output/1_*` até `output/5_*`.
+- Exceção: quando `nome_inicial == nome_final`, usa formato reduzido para evitar repetição.
+- Exemplo com `paint`: `20260109_100355 - 1500392104_p.jpg`.
+- Exemplo reduzido: `1200090006_sr.jpg`.
+
+## Modo de teste (rápido) e modo completo
+- Padrão: o pipeline processa só os primeiros 10 arquivos de entrada para acelerar testes.
+- Completo: quando necessário, rodar com `--full` para processar todos os arquivos.
+- A validação por baseline (`validar_saidas.py`) roda automaticamente no modo `--full`.
+
+## Prioridade após performance
+- Depois de finalizar as otimizações de velocidade, executar uma etapa obrigatória de QA visual do lote processado.
+- Esse QA deve revisar qualidade visual e consistência de renomeação antes de considerar o ciclo encerrado.
+
+Comandos:
+- Teste rápido (padrão): `python scripts/pipeline.py`
+- Teste rápido com limite customizado: `python scripts/pipeline.py --limit 15`
+- Teste completo: `python scripts/pipeline.py --full`
