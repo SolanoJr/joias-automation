@@ -1,12 +1,19 @@
 import re
 import os
 import time
+import hashlib
+import sys
 from collections import Counter
 from pathlib import Path
 
 import cv2
 import numpy as np
 import pytesseract
+
+# Adiciona scripts ao path para importação
+scripts_dir = Path(__file__).parent
+if str(scripts_dir) not in sys.path:
+    sys.path.insert(0, str(scripts_dir))
 
 from barcode_etiqueta import ler_barcode_imagem
 
@@ -39,6 +46,42 @@ CODE_READ_TIMEOUT_SIMPLE_S = float((os.getenv("CODE_READ_TIMEOUT_SIMPLE_S") or "
 CODE_READ_TIMEOUT_INTENSIVO_S = float((os.getenv("CODE_READ_TIMEOUT_INTENSIVO_S") or "8.0").strip() or "8.0")
 CODE_READ_TIMEOUT_OCR_S = float((os.getenv("CODE_READ_TIMEOUT_OCR_S") or "12.0").strip() or "12.0")
 CODE_READ_TIMEOUT_ITEM_S = float((os.getenv("CODE_READ_TIMEOUT_ITEM_S") or "20.0").strip() or "20.0")
+
+# ===== OCR CACHE CONFIG =====
+OCR_CACHE_ENABLED = os.getenv("OCR_CACHE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+OCR_CACHE_DIR = Path("output/cache_ocr")
+OCR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _get_file_hash(file_path: Path) -> str | None:
+    """Calcula SHA256 do arquivo para usar como chave de cache"""
+    try:
+        return hashlib.sha256(file_path.read_bytes()).hexdigest()[:16]
+    except Exception:
+        return None
+
+def _ocr_result_from_cache(cache_key: str | None) -> str | None:
+    """Recupera resultado do cache"""
+    if not OCR_CACHE_ENABLED or not cache_key:
+        return None
+    
+    cache_file = OCR_CACHE_DIR / f"{cache_key}.ocr"
+    if cache_file.exists():
+        try:
+            return cache_file.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    return None
+
+def _ocr_result_to_cache(cache_key: str | None, resultado: str) -> None:
+    """Salva resultado no cache"""
+    if not OCR_CACHE_ENABLED or not cache_key or not resultado:
+        return
+    
+    cache_file = OCR_CACHE_DIR / f"{cache_key}.ocr"
+    try:
+        cache_file.write_text(resultado, encoding="utf-8")
+    except Exception:
+        pass  # Log silencioso, não interrompe execução
 
 
 def _now() -> float:
@@ -226,6 +269,12 @@ def _ocr_digits(img: np.ndarray, config: str) -> str | None:
 
 
 def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
+    # ===== CACHE CHECK =====
+    cache_key = _get_file_hash(paint_path)
+    cached_result = _ocr_result_from_cache(cache_key)
+    if cached_result:
+        return cached_result
+    
     img = cv2.imread(str(paint_path))
     if img is None:
         return None
@@ -273,12 +322,14 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
             codigo = _ocr_digits(candidate, cfg)
             chamadas += 1
             if codigo:
+                _ocr_result_to_cache(cache_key, codigo)
                 return codigo
 
             cfg_alt = "--psm 6 -c tessedit_char_whitelist=0123456789"
             codigo_alt = _ocr_digits(candidate, cfg_alt)
             chamadas += 1
             if codigo_alt:
+                _ocr_result_to_cache(cache_key, codigo_alt)
                 return codigo_alt
 
             if chamadas >= MAX_OCR_CALLS_PAINT:
@@ -288,6 +339,12 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
 
 
 def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str | None:
+    # ===== CACHE CHECK =====
+    cache_key = _get_file_hash(paint_path)
+    cached_result = _ocr_result_from_cache(cache_key)
+    if cached_result:
+        return cached_result
+    
     img = cv2.imread(str(paint_path))
     if img is None:
         return None
@@ -326,6 +383,7 @@ def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str
                     codigo = _ocr_digits(up, cfg)
                     chamadas += 1
                     if codigo:
+                        _ocr_result_to_cache(cache_key, codigo)
                         return codigo
 
                     if chamadas >= MAX_OCR_CALLS_PAINT_INTENSIVO:
@@ -335,6 +393,12 @@ def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str
 
 
 def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> str | None:
+    # ===== CACHE CHECK =====
+    cache_key = _get_file_hash(caminho_img)
+    cached_result = _ocr_result_from_cache(cache_key)
+    if cached_result:
+        return cached_result
+    
     img = cv2.imread(str(caminho_img))
     if img is None:
         return None
@@ -387,6 +451,7 @@ def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> st
                     codigo = _ocr_digits(up, cfg)
                     chamadas += 1
                     if codigo:
+                        _ocr_result_to_cache(cache_key, codigo)
                         return codigo
 
                     if chamadas >= MAX_OCR_CALLS_IMAGEM_COMPLETA:
@@ -396,6 +461,12 @@ def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> st
 
 
 def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: float | None = None) -> str | None:
+    # ===== CACHE CHECK =====
+    cache_key = _get_file_hash(caminho_img)
+    cached_result = _ocr_result_from_cache(cache_key)
+    if cached_result:
+        return cached_result
+    
     img = cv2.imread(str(caminho_img))
     if img is None:
         return None
@@ -482,6 +553,7 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: f
                         codigo = _ocr_digits(up, cfg)
                         chamadas += 1
                         if codigo:
+                            _ocr_result_to_cache(cache_key, codigo)
                             return codigo
 
                         if chamadas >= limite_chamadas:
