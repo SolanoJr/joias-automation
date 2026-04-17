@@ -30,6 +30,10 @@ MIN_BBOX_AREA_RATIO = 0.02
 MIN_COMPONENT_AREA_RATIO = 0.010
 MANTER_APENAS_MAIOR_COMPONENTE = False
 
+# ===== ZOOM ADAPTATIVO =====
+ENABLE_ADAPTIVE_ZOOM = os.getenv("SEG_ADAPTIVE_ZOOM", "1").strip().lower() in {"1", "true", "yes", "on"}
+ADAPTIVE_ZOOM_MULTIPLIER = float(os.getenv("SEG_ADAPTIVE_ZOOM_MULTIPLIER", "1.5"))
+
 session = new_session("isnet-general-use")
 FAST_MODE = os.getenv("SEG_FAST_MODE", "1").strip().lower() in {"1", "true", "yes", "on"}
 FAST_MAX_SIDE = int(os.getenv("SEG_FAST_MAX_SIDE", "1024"))
@@ -119,6 +123,28 @@ def _downscale_rapido(img: Image.Image, max_side_override: int | None = None) ->
     return img.resize((novo_w, novo_h), Image.Resampling.LANCZOS)
 
 
+def _calcular_zoom_adaptativo(bbox_area_ratio: float) -> float:
+    """
+    Calcula fator de zoom baseado no tamanho relativo da joia.
+    Usado para melhorar segmentação de joias pequenas.
+    """
+    if not ENABLE_ADAPTIVE_ZOOM or bbox_area_ratio <= 0:
+        return 1.0
+    
+    # Se joia é grande o bastante, sem zoom
+    if bbox_area_ratio >= 0.05:
+        return 1.0
+    # Se joia é pequena, aplicar zoom moderado
+    elif bbox_area_ratio >= 0.02:
+        return min(ADAPTIVE_ZOOM_MULTIPLIER * 2/3, 1.3)
+    # Se joia é muito pequena, aplicar zoom agressivo
+    elif bbox_area_ratio >= 0.01:
+        return ADAPTIVE_ZOOM_MULTIPLIER
+    else:
+        # Rejeitada (< 1%), retorna 1.0
+        return 1.0
+
+
 def _segmentar_e_renderizar(
     imagem_path: Path,
     img_original: Image.Image,
@@ -182,6 +208,13 @@ def _segmentar_e_renderizar(
     joia = sem_fundo.crop((x1, y1, x2, y2))
     max_size = int(SIZE * MAX_SCALE)
     joia.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    
+    # ===== ZOOM ADAPTATIVO: Upscale joias pequenas para melhor OCR =====
+    zoom_factor = _calcular_zoom_adaptativo(bbox_area_ratio)
+    if zoom_factor > 1.0:
+        novo_w = int(joia.width * zoom_factor)
+        novo_h = int(joia.height * zoom_factor)
+        joia = joia.resize((novo_w, novo_h), Image.Resampling.LANCZOS)
 
     fundo = Image.new("RGBA", (SIZE, SIZE), (255, 255, 255, 255))
     x = (SIZE - joia.width) // 2

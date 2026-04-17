@@ -47,6 +47,11 @@ CODE_READ_TIMEOUT_INTENSIVO_S = float((os.getenv("CODE_READ_TIMEOUT_INTENSIVO_S"
 CODE_READ_TIMEOUT_OCR_S = float((os.getenv("CODE_READ_TIMEOUT_OCR_S") or "12.0").strip() or "12.0")
 CODE_READ_TIMEOUT_ITEM_S = float((os.getenv("CODE_READ_TIMEOUT_ITEM_S") or "20.0").strip() or "20.0")
 
+# ===== OCR PREPROCESSING & ENHANCEMENT =====
+ENABLE_ADAPTIVE_PREPROCESSING = os.getenv("ENABLE_ADAPTIVE_PREPROCESSING", "1").strip().lower() in {"1", "true", "yes", "on"}
+CLAHE_CLIP_LIMIT = float(os.getenv("CLAHE_CLIP_LIMIT", "2.0"))
+CLAHE_TILE_SIZE = int(os.getenv("CLAHE_TILE_SIZE", "8"))
+
 # ===== OCR CACHE CONFIG =====
 OCR_CACHE_ENABLED = os.getenv("OCR_CACHE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 OCR_CACHE_DIR = Path("output/cache_ocr")
@@ -268,6 +273,41 @@ def _ocr_digits(img: np.ndarray, config: str) -> str | None:
     return texto.upper()
 
 
+def _preprocessar_adaptativo(img: np.ndarray) -> list[np.ndarray]:
+    """
+    Gera variantes pré-processadas de uma imagem para melhor OCR.
+    Inclui CLAHE + sharpening para imagens pequenas.
+    """
+    if not ENABLE_ADAPTIVE_PREPROCESSING:
+        return [img]
+    
+    variantes = [img]
+    
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
+    
+    # CLAHE básico
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=(CLAHE_TILE_SIZE, CLAHE_TILE_SIZE))
+    clahe_img = clahe.apply(gray)
+    variantes.append(clahe_img)
+    
+    # CLAHE + Sharpening (bom para textos pequenos)
+    kernel_sharpen = np.array([[-1, -1, -1],
+                                [-1,  9, -1],
+                                [-1, -1, -1]]) / 1.0
+    clahe_sharp = cv2.filter2D(clahe_img, -1, kernel_sharpen)
+    variantes.append(clahe_sharp)
+    
+    # CLAHE + Morphological closing (bom para caracteres quebrados)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    clahe_close = cv2.morphologyEx(clahe_img, cv2.MORPH_CLOSE, kernel_close, iterations=1)
+    variantes.append(clahe_close)
+    
+    return variantes
+
+
 def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
     # ===== CACHE CHECK =====
     cache_key = _get_file_hash(paint_path)
@@ -306,6 +346,10 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
         255 - adapt,
         nitida,
     ]
+    
+    # Adicionar variantes pré-processadas adaptativas
+    variantes_adap = _preprocessar_adaptativo(gray)
+    candidatos.extend([v for v in variantes_adap if v is not None])
 
     chamadas = 0
     for base in candidatos:
