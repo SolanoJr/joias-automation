@@ -1,26 +1,21 @@
 from pathlib import Path
-import os
-import csv
-import time
 import cv2
-from ultralytics import YOLO
 import pytesseract
 import re
 
 # ===== CONFIG =====
 INPUT_DIR = Path("input_raw/fotos_originais")
-OUT_ETI = Path("output/1_etiquetas")
-OUT_PNT = Path("output/2_paints")
-OUT_SEM = Path("output/3_sem_etiqueta")
+OUT_ETI = Path("output/etiquetas")
+OUT_PNT = Path("output/paints")
+OUT_SEM = Path("output/sem_etiqueta")
 USE_LISTA_REPROCESSAR = False
 LISTA_REPROCESSAR = Path("output/analysis/lista_reprocessar_sem_etiqueta.txt")
-USE_LISTA_REPROCESSAR = (os.getenv("USE_LISTA_REPROCESSAR", "1" if USE_LISTA_REPROCESSAR else "0").strip().lower() in {"1", "true", "yes", "on"})
 
 # coloque o caminho do seu best.pt treinado
 MODEL_PATH = Path(r"runs/detect/runs/codigo_v13/weights/best.pt")
 
 # thresholds
-CONF_MIN = 0.30  # Reduzido de 0.35 para detectar joias ornamentadas
+CONF_MIN = 0.35
 DEVICE = "cpu"
 
 # filtros simples pra evitar caixa absurda
@@ -29,12 +24,7 @@ MIN_W = 30
 MIN_H = 15
 PAD_CROP_RATIO = 0.10
 PAD_ERASE_PX = 8
-ETIQUETA_ERASE_EXTRA_PX = int((os.getenv("ETIQUETA_ERASE_EXTRA_PX") or "0").strip() or 0)
-ETIQUETA_ERASE_RIGHT_EXTRA_PX = int((os.getenv("ETIQUETA_ERASE_RIGHT_EXTRA_PX") or "0").strip() or 0)
 ENABLE_PAINT_OCR_FALLBACK = True
-DETECT_SKIP_IF_UPTODATE = os.getenv("DETECT_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
-DETECT_SKIP_BY_EXISTENCE = os.getenv("DETECT_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
-DETECT_PROFILE_CSV = (os.getenv("DETECT_PROFILE_CSV") or "").strip()
 
 # ===================
 
@@ -269,8 +259,6 @@ def _fallback_paint_por_ocr(img_bgr):
     return expand_box_ratio(x1, y1, x2, y2, w, h, 0.20)
 
 def main():
-    t_model_load_s = 0.0
-    t_start_model = time.perf_counter()
     if not MODEL_PATH.exists():
         print(f"ERRO: modelo não encontrado: {MODEL_PATH}")
         return
@@ -279,30 +267,8 @@ def main():
     OUT_PNT.mkdir(parents=True, exist_ok=True)
     OUT_SEM.mkdir(parents=True, exist_ok=True)
 
+    from ultralytics import YOLO
     model = YOLO(str(MODEL_PATH))
-    t_model_load_s = time.perf_counter() - t_start_model
-
-    profile_writer = None
-    profile_fp = None
-    if DETECT_PROFILE_CSV:
-        profile_path = Path(DETECT_PROFILE_CSV)
-        profile_path.parent.mkdir(parents=True, exist_ok=True)
-        profile_fp = profile_path.open("w", encoding="utf-8", newline="")
-        profile_writer = csv.writer(profile_fp)
-        profile_writer.writerow([
-            "image",
-            "base",
-            "status",
-            "cache_hit",
-            "tempo_total_item_s",
-            "tempo_preprocess_s",
-            "tempo_inferencia_s",
-            "tempo_posprocess_s",
-            "tempo_gate_ocr_s",
-            "tempo_fallback_ocr_s",
-            "etiqueta_count",
-            "paint_count",
-        ])
 
     imgs = sorted([*INPUT_DIR.glob("*.jpg"), *INPUT_DIR.glob("*.jpeg"), *INPUT_DIR.glob("*.png")])
     if not imgs:
@@ -316,100 +282,13 @@ def main():
             imgs = [p for p in imgs if p.name in lista_nomes]
             print(f"Modo seletivo ativo: {len(imgs)} imagem(ns) da lista {LISTA_REPROCESSAR}")
 
-    limite_env = (os.getenv("PROCESS_LIMIT") or "").strip()
-    if limite_env:
-        try:
-            limite = int(limite_env)
-        except ValueError:
-            limite = 0
-        if limite > 0:
-            imgs = imgs[:limite]
-            print(f"Modo teste rápido ativo: processando apenas {len(imgs)} imagem(ns)")
-
     print("Detectando etiqueta + paint (AABB) e gerando crops + sem_etiqueta...\n")
 
     for img_path in imgs:
-        t_item_start = time.perf_counter()
-        t_preprocess_s = 0.0
-        t_inferencia_s = 0.0
-        t_posprocess_s = 0.0
-        t_gate_ocr_s = 0.0
-        t_fallback_ocr_s = 0.0
-        base = img_path.stem
-
-        out_sem = OUT_SEM / f"{base}.jpg"
-        existentes_eti = sorted(OUT_ETI.glob(f"{base}_etiqueta_*.jpg"))
-        existentes_pnt = sorted(OUT_PNT.glob(f"{base}_paint_*.jpg"))
-        existentes_pnt_fb = sorted(OUT_PNT.glob(f"{base}_paint_fb_*.jpg"))
-        relacionados = [out_sem, *existentes_eti, *existentes_pnt, *existentes_pnt_fb]
-
-        if DETECT_SKIP_BY_EXISTENCE and out_sem.exists() and relacionados:
-            print(f"{img_path.name} -> cache_hit: detect pulado (saídas existentes)")
-            if profile_writer is not None:
-                t_total_item = time.perf_counter() - t_item_start
-                profile_writer.writerow([
-                    img_path.name,
-                    base,
-                    "cache_hit_existence",
-                    1,
-                    f"{t_total_item:.6f}",
-                    f"{t_preprocess_s:.6f}",
-                    f"{t_inferencia_s:.6f}",
-                    f"{t_posprocess_s:.6f}",
-                    f"{t_gate_ocr_s:.6f}",
-                    f"{t_fallback_ocr_s:.6f}",
-                    0,
-                    0,
-                ])
-            continue
-
-        if DETECT_SKIP_IF_UPTODATE and out_sem.exists() and relacionados:
-            try:
-                src_mtime = img_path.stat().st_mtime
-                if all(p.exists() and p.stat().st_mtime >= src_mtime for p in relacionados):
-                    print(f"{img_path.name} -> cache_hit: detect pulado (saídas atualizadas)")
-                    if profile_writer is not None:
-                        t_total_item = time.perf_counter() - t_item_start
-                        profile_writer.writerow([
-                            img_path.name,
-                            base,
-                            "cache_hit_uptodate",
-                            1,
-                            f"{t_total_item:.6f}",
-                            f"{t_preprocess_s:.6f}",
-                            f"{t_inferencia_s:.6f}",
-                            f"{t_posprocess_s:.6f}",
-                            f"{t_gate_ocr_s:.6f}",
-                            f"{t_fallback_ocr_s:.6f}",
-                            0,
-                            0,
-                        ])
-                    continue
-            except Exception:
-                pass
-
-        t_pre_start = time.perf_counter()
         img = cv2.imread(str(img_path))
         if img is None:
             print(f"Falha ao ler: {img_path.name}")
-            if profile_writer is not None:
-                t_total_item = time.perf_counter() - t_item_start
-                profile_writer.writerow([
-                    img_path.name,
-                    base,
-                    "erro_leitura",
-                    0,
-                    f"{t_total_item:.6f}",
-                    f"{t_preprocess_s:.6f}",
-                    f"{t_inferencia_s:.6f}",
-                    f"{t_posprocess_s:.6f}",
-                    f"{t_gate_ocr_s:.6f}",
-                    f"{t_fallback_ocr_s:.6f}",
-                    0,
-                    0,
-                ])
             continue
-        t_preprocess_s += time.perf_counter() - t_pre_start
 
         h, w = img.shape[:2]
         base = img_path.stem
@@ -431,18 +310,8 @@ def main():
             except Exception:
                 pass
 
-        # inferência com pré-processamento CLAHE para melhorar detecção
-        t_inf_start = time.perf_counter()
-        
-        # Aplicar CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        # para melhorar detecção em imagens com baixo contraste (brincos ornamentados, anéis)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        clahe_gray = clahe.apply(gray)
-        img_for_yolo = cv2.cvtColor(clahe_gray, cv2.COLOR_GRAY2BGR)
-        
-        res = model.predict(source=img_for_yolo, conf=CONF_MIN, verbose=False, device=DEVICE)[0]
-        t_inferencia_s += time.perf_counter() - t_inf_start
+        # inferência
+        res = model.predict(source=img, conf=CONF_MIN, verbose=False, device=DEVICE)[0]
         names = res.names  # {0:'etiqueta', 1:'paint'} (esperado)
 
         # copiar original pra pintar retângulos brancos
@@ -453,7 +322,6 @@ def main():
 
         candidatos_por_classe = {}
 
-        t_post_start = time.perf_counter()
         if res.boxes is not None and len(res.boxes) > 0:
             for b in res.boxes:
                 conf = float(b.conf[0])
@@ -487,11 +355,6 @@ def main():
                 cv2.imwrite(str(out), crop)
                 eti_count += 1
 
-                if ETIQUETA_ERASE_EXTRA_PX > 0:
-                    ex1, ey1, ex2, ey2 = expand_box_px(ex1, ey1, ex2, ey2, w, h, ETIQUETA_ERASE_EXTRA_PX)
-                if ETIQUETA_ERASE_RIGHT_EXTRA_PX > 0:
-                    ex2 = min(w - 1, ex2 + ETIQUETA_ERASE_RIGHT_EXTRA_PX)
-
             elif label == "paint":
                 crop_ref = _refinar_crop_paint(crop)
                 if _crop_paint_valido(crop_ref):
@@ -512,16 +375,8 @@ def main():
                 f"  - {label} conf={conf:.3f} box=({x1},{y1},{x2},{y2}) "
                 f"crop_pad=({cx1},{cy1},{cx2},{cy2}) erase_pad=({ex1},{ey1},{ex2},{ey2})"
             )
-        t_posprocess_s += time.perf_counter() - t_post_start
 
-        gate_ocr_ok = False
-        if ENABLE_PAINT_OCR_FALLBACK and pnt_count == 0:
-            t_gate_start = time.perf_counter()
-            gate_ocr_ok = _tem_digitos_na_faixa_inferior(sem)
-            t_gate_ocr_s += time.perf_counter() - t_gate_start
-
-        if ENABLE_PAINT_OCR_FALLBACK and pnt_count == 0 and gate_ocr_ok:
-            t_fb_start = time.perf_counter()
+        if ENABLE_PAINT_OCR_FALLBACK and pnt_count == 0 and _tem_digitos_na_faixa_inferior(sem):
             box_fb = _fallback_paint_por_ocr(img)
             if box_fb is not None:
                 fx1, fy1, fx2, fy2 = box_fb
@@ -543,34 +398,12 @@ def main():
                     ex1, ey1, ex2, ey2 = expand_box_px(fx1, fy1, fx2, fy2, w, h, PAD_ERASE_PX)
                     cv2.rectangle(sem, (ex1, ey1), (ex2, ey2), (255, 255, 255), thickness=-1)
                     print(f"  - paint_fallback_ocr box=({fx1},{fy1},{fx2},{fy2}) erase=({ex1},{ey1},{ex2},{ey2})")
-                    t_fallback_ocr_s += time.perf_counter() - t_fb_start
 
         # salva sem_etiqueta SEM filtros, SEM clarear imagem toda
         out_sem = OUT_SEM / f"{base}.jpg"
         cv2.imwrite(str(out_sem), sem)
 
         print(f"{img_path.name} -> etiqueta:{eti_count} paint:{pnt_count} | sem_etiqueta OK")
-
-        if profile_writer is not None:
-            t_total_item = time.perf_counter() - t_item_start
-            profile_writer.writerow([
-                img_path.name,
-                base,
-                "ok",
-                0,
-                f"{t_total_item:.6f}",
-                f"{t_preprocess_s:.6f}",
-                f"{t_inferencia_s:.6f}",
-                f"{t_posprocess_s:.6f}",
-                f"{t_gate_ocr_s:.6f}",
-                f"{t_fallback_ocr_s:.6f}",
-                eti_count,
-                pnt_count,
-            ])
-
-    if profile_fp is not None:
-        profile_fp.close()
-        print(f"Profiling detect salvo em: {DETECT_PROFILE_CSV} | model_load_s={t_model_load_s:.4f}")
 
     print("\nFinalizado.")
 

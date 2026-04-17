@@ -34,13 +34,10 @@ MANTER_APENAS_MAIOR_COMPONENTE = False
 ENABLE_ADAPTIVE_ZOOM = os.getenv("SEG_ADAPTIVE_ZOOM", "1").strip().lower() in {"1", "true", "yes", "on"}
 ADAPTIVE_ZOOM_MULTIPLIER = float(os.getenv("SEG_ADAPTIVE_ZOOM_MULTIPLIER", "1.5"))
 
-session = new_session("isnet-general-use")
-FAST_MODE = os.getenv("SEG_FAST_MODE", "1").strip().lower() in {"1", "true", "yes", "on"}
-FAST_MAX_SIDE = int(os.getenv("SEG_FAST_MAX_SIDE", "1024"))
-SEG_ADAPTIVE_RETRY = os.getenv("SEG_ADAPTIVE_RETRY", "1").strip().lower() in {"1", "true", "yes", "on"}
-SEG_ADAPTIVE_RETRY_MAX_SIDE = int(os.getenv("SEG_ADAPTIVE_RETRY_MAX_SIDE", "1600"))
-SEG_SKIP_IF_UPTODATE = os.getenv("SEG_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
-SEG_SKIP_BY_EXISTENCE = os.getenv("SEG_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+# ===== ENSEMBLE SEGMENTATION MODELS =====
+ENABLE_ENSEMBLE_SEGMENTATION = os.getenv("ENABLE_ENSEMBLE_SEGMENTATION", "1").strip().lower() in {"1", "true", "yes", "on"}
+ENSEMBLE_MODELS = os.getenv("ENSEMBLE_MODELS", "isnet-general-use,u2net").split(",")
+ENSEMBLE_VOTING_THRESHOLD = float(os.getenv("ENSEMBLE_VOTING_THRESHOLD", "0.5"))
 
 
 def _is_canonical_stem(stem: str) -> bool:
@@ -150,18 +147,63 @@ def _segmentar_e_renderizar(
     img_original: Image.Image,
     max_side_tentativa: int,
 ) -> tuple[Image.Image | None, str | None]:
-    try:
+    if not ENABLE_ENSEMBLE_SEGMENTATION or len(ENSEMBLE_MODELS) <= 1:
+        # Modo single model (padrão)
+        try:
+            img_para_rembg = _downscale_rapido(img_original, max_side_override=max_side_tentativa)
+            rembg_output = remove(img_para_rembg, session=session)
+        except Exception as e:
+            logging.error(f"Erro no rembg {imagem_path.name}: {e}")
+            return None, "erro_rembg"
+
+        sem_fundo = _to_rgba_image(rembg_output)
+        if sem_fundo is None:
+            logging.error(f"Tipo de saída do rembg não suportado em {imagem_path.name}")
+            return None, "saida_nao_suportada"
+    else:
+        # Modo ensemble - tentar múltiplos modelos
+        logging.info(f"Ensemble segmentation para {imagem_path.name}: tentando {len(ENSEMBLE_MODELS)} modelos")
+        
+        ensemble_masks = []
         img_para_rembg = _downscale_rapido(img_original, max_side_override=max_side_tentativa)
-        rembg_output = remove(img_para_rembg, session=session)
-    except Exception as e:
-        logging.error(f"Erro no rembg {imagem_path.name}: {e}")
-        return None, "erro_rembg"
+        
+        for model_name in ENSEMBLE_MODELS:
+            try:
+                model_session = new_session(model_name.strip())
+                rembg_output = remove(img_para_rembg, session=model_session)
+                sem_fundo = _to_rgba_image(rembg_output)
+                if sem_fundo is not None:
+                    arr = np.array(sem_fundo)
+                    alpha = arr[:, :, 3]
+                    mask = (alpha > ALPHA_THRESHOLD).astype(np.uint8)
+                    ensemble_masks.append(mask)
+                    logging.debug(f"Modelo {model_name} OK para {imagem_path.name}")
+                else:
+                    logging.warning(f"Modelo {model_name} falhou para {imagem_path.name}")
+            except Exception as e:
+                logging.warning(f"Erro no modelo {model_name} para {imagem_path.name}: {e}")
+        
+        if not ensemble_masks:
+            return None, "erro_ensemble_todos_falharam"
+        
+        # Voting ensemble: máscara final é a média das máscaras
+        if len(ensemble_masks) > 1:
+            mask_stack = np.stack(ensemble_masks, axis=0)
+            ensemble_mask = np.mean(mask_stack, axis=0) > ENSEMBLE_VOTING_THRESHOLD
+            ensemble_mask = ensemble_mask.astype(np.uint8) * 255
+            
+            # Criar imagem RGBA com a máscara ensemble
+            arr = np.array(img_para_rembg.convert("RGBA"))
+            arr[:, :, 3] = ensemble_mask
+            sem_fundo = Image.fromarray(arr, "RGBA")
+            logging.info(f"Ensemble voting aplicado para {imagem_path.name}")
+        else:
+            # Fallback para single model se apenas um funcionou
+            arr = np.array(img_para_rembg.convert("RGBA"))
+            arr[:, :, 3] = ensemble_masks[0] * 255
+            sem_fundo = Image.fromarray(arr, "RGBA")
 
-    sem_fundo = _to_rgba_image(rembg_output)
-    if sem_fundo is None:
-        logging.error(f"Tipo de saída do rembg não suportado em {imagem_path.name}")
-        return None, "saida_nao_suportada"
-
+    # Continuar com processamento normal da máscara
     arr = np.array(sem_fundo)
     alpha = arr[:, :, 3]
     mask = alpha > ALPHA_THRESHOLD

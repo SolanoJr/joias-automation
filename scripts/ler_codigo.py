@@ -52,6 +52,13 @@ ENABLE_ADAPTIVE_PREPROCESSING = os.getenv("ENABLE_ADAPTIVE_PREPROCESSING", "1").
 CLAHE_CLIP_LIMIT = float(os.getenv("CLAHE_CLIP_LIMIT", "2.0"))
 CLAHE_TILE_SIZE = int(os.getenv("CLAHE_TILE_SIZE", "8"))
 
+# ===== OCR ZOOM ADAPTATIVO =====
+ENABLE_OCR_ADAPTIVE_ZOOM = os.getenv("ENABLE_OCR_ADAPTIVE_ZOOM", "1").strip().lower() in {"1", "true", "yes", "on"}
+OCR_ZOOM_THRESHOLD_SMALL = int(os.getenv("OCR_ZOOM_THRESHOLD_SMALL", "100"))  # px
+OCR_ZOOM_THRESHOLD_MEDIUM = int(os.getenv("OCR_ZOOM_THRESHOLD_MEDIUM", "200"))  # px
+OCR_ZOOM_MULTIPLIER_SMALL = float(os.getenv("OCR_ZOOM_MULTIPLIER_SMALL", "2.0"))
+OCR_ZOOM_MULTIPLIER_MEDIUM = float(os.getenv("OCR_ZOOM_MULTIPLIER_MEDIUM", "1.5"))
+
 # ===== OCR CACHE CONFIG =====
 OCR_CACHE_ENABLED = os.getenv("OCR_CACHE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
 OCR_CACHE_DIR = Path("output/cache_ocr")
@@ -261,16 +268,51 @@ def _selecionar_por_votos(candidatos: list[str], min_votos: int = 2) -> str | No
     return None
 
 
-def _ocr_digits(img: np.ndarray, config: str) -> str | None:
-    try:
-        texto = pytesseract.image_to_string(img, config=config, timeout=OCR_TIMEOUT_SECONDS)
-    except BaseException:
-        return None
+def _calcular_zoom_ocr_adaptativo(img: np.ndarray) -> float:
+    """
+    Calcula zoom adaptativo para OCR baseado no tamanho da imagem.
+    Útil para textos muito pequenos que precisam de ampliação.
+    """
+    if not ENABLE_OCR_ADAPTIVE_ZOOM:
+        return 1.0
+    
+    h, w = img.shape[:2]
+    menor_lado = min(h, w)
+    
+    if menor_lado < OCR_ZOOM_THRESHOLD_SMALL:
+        return OCR_ZOOM_MULTIPLIER_SMALL
+    elif menor_lado < OCR_ZOOM_THRESHOLD_MEDIUM:
+        return OCR_ZOOM_MULTIPLIER_MEDIUM
+    else:
+        return 1.0
 
-    texto = texto.strip().replace(" ", "").replace("\n", "")
-    if not texto:
-        return None
-    return texto.upper()
+
+def _preprocessar_adaptativo(img: np.ndarray) -> list[np.ndarray]:
+    """
+    Gera variantes de pré-processamento adaptativo para OCR.
+    Retorna lista de imagens processadas.
+    """
+    if not ENABLE_ADAPTIVE_PREPROCESSING:
+        return []
+    
+    variantes = []
+    
+    # CLAHE básico
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=(CLAHE_TILE_SIZE, CLAHE_TILE_SIZE))
+    clahe_img = clahe.apply(img)
+    variantes.append(clahe_img)
+    
+    # CLAHE + sharpening
+    kernel_sharp = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    sharpened = cv2.filter2D(clahe_img, -1, kernel_sharp)
+    variantes.append(sharpened)
+    
+    # Morphological closing para conectar caracteres quebrados
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    closed = cv2.morphologyEx(clahe_img, cv2.MORPH_CLOSE, kernel_close)
+    variantes.append(closed)
+    
+    return variantes
 
 
 def _preprocessar_adaptativo(img: np.ndarray) -> list[np.ndarray]:
@@ -320,6 +362,14 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # ===== ZOOM ADAPTATIVO PARA OCR =====
+    zoom_factor = _calcular_zoom_ocr_adaptativo(gray)
+    if zoom_factor > 1.0:
+        h, w = gray.shape
+        new_w = int(w * zoom_factor)
+        new_h = int(h * zoom_factor)
+        gray = cv2.resize(gray, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
     blur = cv2.GaussianBlur(gray, (3, 3), 0)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(blur)
