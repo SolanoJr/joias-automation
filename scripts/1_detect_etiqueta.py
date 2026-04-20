@@ -1,12 +1,6 @@
-import subprocess
-import sys
-import os
+import runpy
+from pathlib import Path
 
 if __name__ == "__main__":
-    # Execute detect_etiqueta.py as a subprocess to avoid import issues
-    cmd = [sys.executable, "scripts/detect_etiqueta.py"]
-    env = os.environ.copy()
-    # Add current directory to Python path
-    env['PYTHONPATH'] = os.getcwd()
-    result = subprocess.run(cmd, env=env)
-    sys.exit(result.returncode)
+    target = Path(__file__).resolve().parent.parent / "project" / "scripts" / "1_detect_etiqueta.py"
+    runpy.run_path(str(target), run_name="__main__")
