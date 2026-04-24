@@ -50,10 +50,21 @@ def run_inprocess(script_path: str, msg, env_extra=None, step_idx: int | None = 
             old_env[k] = os.environ.get(k)
             os.environ[k] = v
 
+    script_dir = str(Path(script_path).resolve().parent)
+    inseriu_path = False
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+        inseriu_path = True
+
     t0 = time.perf_counter()
     try:
         runpy.run_path(script_path, run_name="__main__")
     finally:
+        if inseriu_path:
+            try:
+                sys.path.remove(script_dir)
+            except ValueError:
+                pass
         if env_extra:
             for k in env_extra.keys():
                 antigo = old_env.get(k)

@@ -257,6 +257,14 @@ def _normalizar_codigo(texto: str | None) -> str | None:
     return None
 
 
+def _ocr_digits(img, cfg: str) -> str | None:
+    try:
+        txt = pytesseract.image_to_string(img, config=cfg, timeout=OCR_TIMEOUT_SECONDS)
+    except BaseException:
+        return None
+    return _normalizar_codigo(txt)
+
+
 def _selecionar_por_votos(candidatos: list[str], min_votos: int = 2) -> str | None:
     if not candidatos:
         return None

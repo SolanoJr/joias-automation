@@ -5,9 +5,9 @@ import re
 
 # ===== CONFIG =====
 INPUT_DIR = Path("input_raw/fotos_originais")
-OUT_ETI = Path("output/etiquetas")
-OUT_PNT = Path("output/paints")
-OUT_SEM = Path("output/sem_etiqueta")
+OUT_ETI = Path("output/1_etiquetas")
+OUT_PNT = Path("output/2_paints")
+OUT_SEM = Path("output/3_sem_etiqueta")
 USE_LISTA_REPROCESSAR = False
 LISTA_REPROCESSAR = Path("output/analysis/lista_reprocessar_sem_etiqueta.txt")
 

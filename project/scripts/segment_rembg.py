@@ -39,6 +39,14 @@ ENABLE_ENSEMBLE_SEGMENTATION = os.getenv("ENABLE_ENSEMBLE_SEGMENTATION", "1").st
 ENSEMBLE_MODELS = os.getenv("ENSEMBLE_MODELS", "isnet-general-use,u2net").split(",")
 ENSEMBLE_VOTING_THRESHOLD = float(os.getenv("ENSEMBLE_VOTING_THRESHOLD", "0.5"))
 
+# ===== EXECUCAO / CACHE =====
+FAST_MODE = os.getenv("SEG_FAST_MODE", "1").strip().lower() in {"1", "true", "yes", "on"}
+FAST_MAX_SIDE = int(os.getenv("SEG_FAST_MAX_SIDE", "1280"))
+SEG_ADAPTIVE_RETRY = os.getenv("SEG_ADAPTIVE_RETRY", "1").strip().lower() in {"1", "true", "yes", "on"}
+SEG_ADAPTIVE_RETRY_MAX_SIDE = int(os.getenv("SEG_ADAPTIVE_RETRY_MAX_SIDE", "2048"))
+SEG_SKIP_IF_UPTODATE = os.getenv("SEG_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
+SEG_SKIP_BY_EXISTENCE = os.getenv("SEG_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _is_canonical_stem(stem: str) -> bool:
     s = (stem or "").strip()
