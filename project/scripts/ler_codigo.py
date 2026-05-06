@@ -40,12 +40,12 @@ SHORT_BARCODE_MIN_DIGITS = 8
 SHORT_BARCODE_MIN_CONSENSUS = 2
 ENABLE_PAINT_INTENSIVO = os.getenv("ENABLE_PAINT_INTENSIVO", "1").strip().lower() in {"1", "true", "yes", "on"}
 PRIORITIZE_BARCODE_FIRST = os.getenv("PRIORITIZE_BARCODE_FIRST", "0").strip().lower() in {"1", "true", "yes", "on"}
-OCR_ETIQUETA_ADAPTIVE = os.getenv("OCR_ETIQUETA_ADAPTIVE", "0").strip().lower() in {"1", "true", "yes", "on"}
+OCR_ETIQUETA_ADAPTIVE = os.getenv("OCR_ETIQUETA_ADAPTIVE", "1").strip().lower() in {"1", "true", "yes", "on"}
 LER_CODIGO_CANONICAL_ONLY = os.getenv("LER_CODIGO_CANONICAL_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
-CODE_READ_TIMEOUT_SIMPLE_S = float((os.getenv("CODE_READ_TIMEOUT_SIMPLE_S") or "2.0").strip() or "2.0")
-CODE_READ_TIMEOUT_INTENSIVO_S = float((os.getenv("CODE_READ_TIMEOUT_INTENSIVO_S") or "8.0").strip() or "8.0")
-CODE_READ_TIMEOUT_OCR_S = float((os.getenv("CODE_READ_TIMEOUT_OCR_S") or "12.0").strip() or "12.0")
-CODE_READ_TIMEOUT_ITEM_S = float((os.getenv("CODE_READ_TIMEOUT_ITEM_S") or "20.0").strip() or "20.0")
+CODE_READ_TIMEOUT_SIMPLE_S = float((os.getenv("CODE_READ_TIMEOUT_SIMPLE_S") or "5.0").strip() or "5.0")
+CODE_READ_TIMEOUT_INTENSIVO_S = float((os.getenv("CODE_READ_TIMEOUT_INTENSIVO_S") or "12.0").strip() or "12.0")
+CODE_READ_TIMEOUT_OCR_S = float((os.getenv("CODE_READ_TIMEOUT_OCR_S") or "15.0").strip() or "15.0")
+CODE_READ_TIMEOUT_ITEM_S = float((os.getenv("CODE_READ_TIMEOUT_ITEM_S") or "35.0").strip() or "35.0")
 
 # ===== OCR PREPROCESSING & ENHANCEMENT =====
 ENABLE_ADAPTIVE_PREPROCESSING = os.getenv("ENABLE_ADAPTIVE_PREPROCESSING", "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -75,7 +75,7 @@ def _ocr_result_from_cache(cache_key: str | None) -> str | None:
     """Recupera resultado do cache"""
     if not OCR_CACHE_ENABLED or not cache_key:
         return None
-    
+
     cache_file = OCR_CACHE_DIR / f"{cache_key}.ocr"
     if cache_file.exists():
         try:
@@ -88,7 +88,7 @@ def _ocr_result_to_cache(cache_key: str | None, resultado: str) -> None:
     """Salva resultado no cache"""
     if not OCR_CACHE_ENABLED or not cache_key or not resultado:
         return
-    
+
     cache_file = OCR_CACHE_DIR / f"{cache_key}.ocr"
     try:
         cache_file.write_text(resultado, encoding="utf-8")
@@ -120,6 +120,11 @@ def _is_valid_candidate(codigo: str | None) -> bool:
         return False
     if codigo.isdigit() and len(codigo) == CODIGO_LEN_ALVO:
         return True
+    # Alfanumérico: prefixo de letras + dígitos (ex: BR1204039, CR3984506, PL2401606)
+    # Aceita 7-10 chars com pelo menos 4 dígitos (cobre BR1204039 = 5 dígitos)
+    if re.fullmatch(r"[A-Z]{1,3}[0-9]{4,9}", codigo):
+        return True
+    # Formato legado: qualquer alnum 7-10 com ≥7 dígitos
     if re.fullmatch(r"[A-Z0-9]{7,10}", codigo) and sum(ch.isdigit() for ch in codigo) >= 7:
         return True
     return False
@@ -244,13 +249,18 @@ def _normalizar_codigo(texto: str | None) -> str | None:
         validos_digits.sort(key=lambda c: (-contagem[c], c))
         return validos_digits[0]
 
-    # Fallback para códigos alfanuméricos típicos de paint (ex: CR3904506)
-    alnum_candidatos = re.findall(r"[A-Z0-9]{7,10}", texto_limpo)
-    for candidato in alnum_candidatos:
+    # Fallback para códigos alfanuméricos típicos de paint/etiqueta (ex: CR3904506, BR1204039)
+    # Aceita prefixo de 1-3 letras + 4-9 dígitos
+    alnum_candidatos = re.findall(r"[A-Z]{1,3}[0-9]{4,9}", texto_limpo)
+    if alnum_candidatos:
+        return alnum_candidatos[0]
+
+    # Fallback legado: qualquer alnum 7-10 com ≥7 dígitos
+    alnum_candidatos_legado = re.findall(r"[A-Z0-9]{7,10}", texto_limpo)
+    for candidato in alnum_candidatos_legado:
         if sum(ch.isdigit() for ch in candidato) < 7:
             continue
         if candidato.isdigit():
-            # não aceitar números curtos sem prefixo; só aceitamos numérico completo
             continue
         return candidato
 
@@ -283,10 +293,10 @@ def _calcular_zoom_ocr_adaptativo(img: np.ndarray) -> float:
     """
     if not ENABLE_OCR_ADAPTIVE_ZOOM:
         return 1.0
-    
+
     h, w = img.shape[:2]
     menor_lado = min(h, w)
-    
+
     if menor_lado < OCR_ZOOM_THRESHOLD_SMALL:
         return OCR_ZOOM_MULTIPLIER_SMALL
     elif menor_lado < OCR_ZOOM_THRESHOLD_MEDIUM:
@@ -302,31 +312,31 @@ def _preprocessar_adaptativo(img: np.ndarray) -> list[np.ndarray]:
     """
     if not ENABLE_ADAPTIVE_PREPROCESSING:
         return [img]
-    
+
     variantes = [img]
-    
+
     if img.ndim == 3:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
         gray = img
-    
+
     # CLAHE básico
     clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=(CLAHE_TILE_SIZE, CLAHE_TILE_SIZE))
     clahe_img = clahe.apply(gray)
     variantes.append(clahe_img)
-    
+
     # CLAHE + Sharpening (bom para textos pequenos)
     kernel_sharpen = np.array([[-1, -1, -1],
                                 [-1,  9, -1],
                                 [-1, -1, -1]]) / 1.0
     clahe_sharp = cv2.filter2D(clahe_img, -1, kernel_sharpen)
     variantes.append(clahe_sharp)
-    
+
     # CLAHE + Morphological closing (bom para caracteres quebrados)
     kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     clahe_close = cv2.morphologyEx(clahe_img, cv2.MORPH_CLOSE, kernel_close, iterations=1)
     variantes.append(clahe_close)
-    
+
     return variantes
 
 
@@ -336,13 +346,13 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
     cached_result = _ocr_result_from_cache(cache_key)
     if cached_result:
         return cached_result
-    
+
     img = cv2.imread(str(paint_path))
     if img is None:
         return None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
+
     # ===== ZOOM ADAPTATIVO PARA OCR =====
     zoom_factor = _calcular_zoom_ocr_adaptativo(gray)
     if zoom_factor > 1.0:
@@ -376,7 +386,7 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
         255 - adapt,
         nitida,
     ]
-    
+
     # Adicionar variantes pré-processadas adaptativas
     variantes_adap = _preprocessar_adaptativo(gray)
     candidatos.extend([v for v in variantes_adap if v is not None])
@@ -418,7 +428,7 @@ def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str
     cached_result = _ocr_result_from_cache(cache_key)
     if cached_result:
         return cached_result
-    
+
     img = cv2.imread(str(paint_path))
     if img is None:
         return None
@@ -472,7 +482,7 @@ def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> st
     cached_result = _ocr_result_from_cache(cache_key)
     if cached_result:
         return cached_result
-    
+
     img = cv2.imread(str(caminho_img))
     if img is None:
         return None
@@ -540,7 +550,7 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: f
     cached_result = _ocr_result_from_cache(cache_key)
     if cached_result:
         return cached_result
-    
+
     img = cv2.imread(str(caminho_img))
     if img is None:
         return None
@@ -555,9 +565,11 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: f
     ]
 
     psm_full = [
+        "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
         "--psm 7 -c tessedit_char_whitelist=0123456789",
         "--psm 6 -c tessedit_char_whitelist=0123456789",
-        "--psm 11 -c tessedit_char_whitelist=0123456789",
     ]
 
     if OCR_ETIQUETA_ADAPTIVE:

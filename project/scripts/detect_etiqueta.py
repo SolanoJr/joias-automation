@@ -16,7 +16,7 @@ LISTA_REPROCESSAR = Path("output/analysis/lista_reprocessar_sem_etiqueta.txt")
 MODEL_PATH = Path("models/best.pt")
 
 # thresholds
-CONF_MIN = 0.35
+CONF_MIN = float(os.getenv("YOLO_CONF_MIN", "0.25"))
 DEVICE = "cpu"
 
 # filtros simples pra evitar caixa absurda

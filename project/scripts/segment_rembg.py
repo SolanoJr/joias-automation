@@ -6,6 +6,7 @@ from rembg import new_session, remove
 from PIL import Image, ImageOps
 from pathlib import Path
 from io import BytesIO
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -46,6 +47,9 @@ SEG_ADAPTIVE_RETRY = os.getenv("SEG_ADAPTIVE_RETRY", "1").strip().lower() in {"1
 SEG_ADAPTIVE_RETRY_MAX_SIDE = int(os.getenv("SEG_ADAPTIVE_RETRY_MAX_SIDE", "2048"))
 SEG_SKIP_IF_UPTODATE = os.getenv("SEG_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
 SEG_SKIP_BY_EXISTENCE = os.getenv("SEG_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+# Paralelização: número de workers para processar imagens em paralelo
+# Padrão 2 (conservador para CPU); aumente para 4 em máquinas com mais RAM/CPU
+SEG_PARALLEL_WORKERS = int(os.getenv("SEG_PARALLEL_WORKERS", "2"))
 
 
 def _is_canonical_stem(stem: str) -> bool:
@@ -135,7 +139,7 @@ def _calcular_zoom_adaptativo(bbox_area_ratio: float) -> float:
     """
     if not ENABLE_ADAPTIVE_ZOOM or bbox_area_ratio <= 0:
         return 1.0
-    
+
     # Se joia é grande o bastante, sem zoom
     if bbox_area_ratio >= 0.05:
         return 1.0
@@ -173,10 +177,10 @@ def _segmentar_e_renderizar(
     else:
         # Modo ensemble - tentar múltiplos modelos
         logging.info(f"Ensemble segmentation para {imagem_path.name}: tentando {len(ENSEMBLE_MODELS)} modelos")
-        
+
         ensemble_masks = []
         img_para_rembg = _downscale_rapido(img_original, max_side_override=max_side_tentativa)
-        
+
         for model_name in ENSEMBLE_MODELS:
             try:
                 model_session = new_session(model_name.strip())
@@ -192,16 +196,16 @@ def _segmentar_e_renderizar(
                     logging.warning(f"Modelo {model_name} falhou para {imagem_path.name}")
             except Exception as e:
                 logging.warning(f"Erro no modelo {model_name} para {imagem_path.name}: {e}")
-        
+
         if not ensemble_masks:
             return None, "erro_ensemble_todos_falharam"
-        
+
         # Voting ensemble: máscara final é a média das máscaras
         if len(ensemble_masks) > 1:
             mask_stack = np.stack(ensemble_masks, axis=0)
             ensemble_mask = np.mean(mask_stack, axis=0) > ENSEMBLE_VOTING_THRESHOLD
             ensemble_mask = ensemble_mask.astype(np.uint8) * 255
-            
+
             # Criar imagem RGBA com a máscara ensemble
             arr = np.array(img_para_rembg.convert("RGBA"))
             arr[:, :, 3] = ensemble_mask
@@ -260,7 +264,7 @@ def _segmentar_e_renderizar(
     joia = sem_fundo.crop((x1, y1, x2, y2))
     max_size = int(SIZE * MAX_SCALE)
     joia.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-    
+
     # ===== ZOOM ADAPTATIVO: Upscale joias pequenas para melhor OCR =====
     zoom_factor = _calcular_zoom_adaptativo(bbox_area_ratio)
     if zoom_factor > 1.0:
@@ -319,27 +323,66 @@ def main():
     if FAST_MODE:
         logging.info(f"Modo rápido de segmentação ativo (FAST_MAX_SIDE={FAST_MAX_SIDE})")
 
-    for idx, p in enumerate(imgs, start=1):
+    # Filtra imagens que já foram processadas (cache)
+    pendentes = []
+    for p in imgs:
         out_path = OUTPUT_DIR / p.name
         if SEG_SKIP_BY_EXISTENCE and out_path.exists():
-            logging.info(f"Processando [{idx}/{total}] {p.name} (cache_hit: segment pulado por existência)")
+            logging.info(f"[cache] {p.name} pulado (já existe)")
             continue
-
         if SEG_SKIP_IF_UPTODATE and out_path.exists():
             try:
                 if out_path.stat().st_mtime >= p.stat().st_mtime:
-                    logging.info(f"Processando [{idx}/{total}] {p.name} (cache_hit: segment pulado)")
+                    logging.info(f"[cache] {p.name} pulado (atualizado)")
                     continue
             except Exception:
                 pass
+        pendentes.append(p)
 
-        logging.info(f"Processando [{idx}/{total}] {p.name}")
+    if not pendentes:
+        logging.info("Todas as imagens já processadas (cache).")
+        return
+
+    workers = max(1, SEG_PARALLEL_WORKERS)
+    logging.info(f"Segmentando {len(pendentes)}/{total} imagens com {workers} worker(s)...")
+
+    def _processar_e_salvar(p: Path) -> tuple[str, bool]:
+        out_path = OUTPUT_DIR / p.name
         out = processar(p)
         if out is None:
-            logging.warning(f"Falhou: {p.name}")
-            continue
+            return p.name, False
         out.save(out_path, quality=95)
-        logging.info(f"OK -> {out_path}")
+        return p.name, True
+
+    if workers == 1:
+        # Modo sequencial (sem overhead de threads)
+        for idx, p in enumerate(pendentes, start=1):
+            logging.info(f"Processando [{idx}/{len(pendentes)}] {p.name}")
+            nome, ok = _processar_e_salvar(p)
+            if ok:
+                logging.info(f"OK -> {OUTPUT_DIR / nome}")
+            else:
+                logging.warning(f"Falhou: {nome}")
+    else:
+        # Modo paralelo com ThreadPoolExecutor
+        resultados: dict[str, bool] = {}
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_path = {executor.submit(_processar_e_salvar, p): p for p in pendentes}
+            concluidos = 0
+            for future in as_completed(future_to_path):
+                concluidos += 1
+                try:
+                    nome, ok = future.result()
+                    resultados[nome] = ok
+                    status = "OK" if ok else "FALHOU"
+                    logging.info(f"[{concluidos}/{len(pendentes)}] {nome}: {status}")
+                except Exception as exc:
+                    p = future_to_path[future]
+                    logging.error(f"Erro em {p.name}: {exc}")
+                    resultados[p.name] = False
+
+        ok_count = sum(1 for v in resultados.values() if v)
+        logging.info(f"Segmentação concluída: {ok_count}/{len(pendentes)} OK")
 
 if __name__ == "__main__":
     main()
