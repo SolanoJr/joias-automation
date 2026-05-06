@@ -18,10 +18,10 @@ OUTPUT_DIR = Path("output/5_segmentado_rembg")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SIZE = 1024
-MAX_SCALE = 0.75
-MARGIN_RATIO = 0.06
-MARGIN_MIN = 24
-MARGIN_MAX = 112
+MAX_SCALE = 0.88   # joia ocupa até 88% do canvas (era 0.75 — deixava muito espaço vazio)
+MARGIN_RATIO = 0.04  # margem menor para joia mais centralizada e maior (era 0.06)
+MARGIN_MIN = 16
+MARGIN_MAX = 80
 ALPHA_THRESHOLD = 10
 DILATE_ITERATIONS = 1
 FALLBACK_ORIGINAL_SE_FALHAR = True
@@ -36,9 +36,12 @@ ENABLE_ADAPTIVE_ZOOM = os.getenv("SEG_ADAPTIVE_ZOOM", "1").strip().lower() in {"
 ADAPTIVE_ZOOM_MULTIPLIER = float(os.getenv("SEG_ADAPTIVE_ZOOM_MULTIPLIER", "1.5"))
 
 # ===== ENSEMBLE SEGMENTATION MODELS =====
-ENABLE_ENSEMBLE_SEGMENTATION = os.getenv("ENABLE_ENSEMBLE_SEGMENTATION", "1").strip().lower() in {"1", "true", "yes", "on"}
+# Padrão: single model (mais rápido). Ative ensemble com ENABLE_ENSEMBLE_SEGMENTATION=1
+ENABLE_ENSEMBLE_SEGMENTATION = os.getenv("ENABLE_ENSEMBLE_SEGMENTATION", "0").strip().lower() in {"1", "true", "yes", "on"}
 ENSEMBLE_MODELS = os.getenv("ENSEMBLE_MODELS", "isnet-general-use,u2net").split(",")
 ENSEMBLE_VOTING_THRESHOLD = float(os.getenv("ENSEMBLE_VOTING_THRESHOLD", "0.5"))
+# Modelo único padrão (usado quando ensemble está desabilitado)
+SINGLE_MODEL = os.getenv("SEG_MODEL", "isnet-general-use")
 
 # ===== EXECUCAO / CACHE =====
 FAST_MODE = os.getenv("SEG_FAST_MODE", "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -135,22 +138,24 @@ def _downscale_rapido(img: Image.Image, max_side_override: int | None = None) ->
 def _calcular_zoom_adaptativo(bbox_area_ratio: float) -> float:
     """
     Calcula fator de zoom baseado no tamanho relativo da joia.
-    Usado para melhorar segmentação de joias pequenas.
+    Garante que joias pequenas fiquem maiores e mais centralizadas no canvas.
     """
     if not ENABLE_ADAPTIVE_ZOOM or bbox_area_ratio <= 0:
         return 1.0
 
-    # Se joia é grande o bastante, sem zoom
-    if bbox_area_ratio >= 0.05:
+    # Joia grande (>10% do canvas): sem zoom extra
+    if bbox_area_ratio >= 0.10:
         return 1.0
-    # Se joia é pequena, aplicar zoom moderado
+    # Joia média (5-10%): zoom leve
+    elif bbox_area_ratio >= 0.05:
+        return 1.2
+    # Joia pequena (2-5%): zoom moderado
     elif bbox_area_ratio >= 0.02:
-        return min(ADAPTIVE_ZOOM_MULTIPLIER * 2/3, 1.3)
-    # Se joia é muito pequena, aplicar zoom agressivo
+        return min(ADAPTIVE_ZOOM_MULTIPLIER, 1.5)
+    # Joia muito pequena (<2%): zoom agressivo
     elif bbox_area_ratio >= 0.01:
         return ADAPTIVE_ZOOM_MULTIPLIER
     else:
-        # Rejeitada (< 1%), retorna 1.0
         return 1.0
 
 
@@ -160,9 +165,9 @@ def _segmentar_e_renderizar(
     max_side_tentativa: int,
 ) -> tuple[Image.Image | None, str | None]:
     if not ENABLE_ENSEMBLE_SEGMENTATION or len(ENSEMBLE_MODELS) <= 1:
-        # Modo single model (padrão)
+        # Modo single model (padrão — mais rápido)
         try:
-            model_name = ENSEMBLE_MODELS[0].strip() if ENSEMBLE_MODELS else "isnet-general-use"
+            model_name = SINGLE_MODEL if not ENABLE_ENSEMBLE_SEGMENTATION else (ENSEMBLE_MODELS[0].strip() if ENSEMBLE_MODELS else "isnet-general-use")
             single_session = new_session(model_name)
             img_para_rembg = _downscale_rapido(img_original, max_side_override=max_side_tentativa)
             rembg_output = remove(img_para_rembg, session=single_session)

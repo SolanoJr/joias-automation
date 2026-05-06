@@ -118,10 +118,12 @@ def _stage_deadline(item_deadline: float | None, stage_budget_s: float) -> float
 def _is_valid_candidate(codigo: str | None) -> bool:
     if not codigo:
         return False
+    # Rejeita EAN-13/EAN-8 (códigos de barras de preço/produto, não de joia)
+    if codigo.isdigit() and len(codigo) in (8, 12, 13):
+        return False
     if codigo.isdigit() and len(codigo) == CODIGO_LEN_ALVO:
         return True
-    # Alfanumérico: prefixo de letras + dígitos (ex: BR1204039, CR3984506, PL2401606)
-    # Aceita 7-10 chars com pelo menos 4 dígitos (cobre BR1204039 = 5 dígitos)
+    # Alfanumérico: prefixo de 1-3 letras + 4-9 dígitos (ex: BR1204039, CR3984506)
     if re.fullmatch(r"[A-Z]{1,3}[0-9]{4,9}", codigo):
         return True
     # Formato legado: qualquer alnum 7-10 com ≥7 dígitos
@@ -237,7 +239,11 @@ def _normalizar_codigo(texto: str | None) -> str | None:
     if not texto:
         return None
 
-    texto_limpo = texto.strip().upper().replace(" ", "").replace("\n", "")
+    # Substitui separadores (newline, tab, |, /) por espaço ANTES de limpar
+    # Isso evita que "ATA\nBR1204039" vire "ATABR1204039"
+    texto_limpo = texto.strip().upper()
+    texto_limpo = re.sub(r"[\n\r\t|/\\]", " ", texto_limpo)
+    texto_limpo = re.sub(r"\s+", " ", texto_limpo).strip()
     if not texto_limpo:
         return None
 
@@ -251,9 +257,10 @@ def _normalizar_codigo(texto: str | None) -> str | None:
 
     # Fallback para códigos alfanuméricos típicos de paint/etiqueta (ex: CR3904506, BR1204039)
     # Aceita prefixo de 1-3 letras + 4-9 dígitos
-    alnum_candidatos = re.findall(r"[A-Z]{1,3}[0-9]{4,9}", texto_limpo)
+    # Usa \b para garantir boundary correto (funciona bem com espaços)
+    alnum_candidatos = re.findall(r"\b[A-Z]{1,3}[0-9]{4,9}\b", texto_limpo)
     if alnum_candidatos:
-        return alnum_candidatos[0]
+        return max(alnum_candidatos, key=len)
 
     # Fallback legado: qualquer alnum 7-10 com ≥7 dígitos
     alnum_candidatos_legado = re.findall(r"[A-Z0-9]{7,10}", texto_limpo)
