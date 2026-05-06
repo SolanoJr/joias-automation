@@ -1,8 +1,12 @@
 import csv
 import re
+import os
 from pathlib import Path
 
 CSV_PATH = Path("output/resultados.csv")
+
+# No modo incremental, preserva arquivos intermediários já renomeados canonicamente
+KEEP_CANONICAL_INTERMEDIATES = os.getenv("KEEP_CANONICAL_INTERMEDIATES", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 PAINTS_DIR = Path("output/2_paints")
 ETIQUETAS_DIR = Path("output/1_etiquetas")
@@ -78,6 +82,10 @@ def main():
 
     if not rows:
         print("CSV vazio, nada para renomear.")
+        return
+
+    if KEEP_CANONICAL_INTERMEDIATES:
+        print("Modo KEEP_CANONICAL_INTERMEDIATES: renomeação de intermediários pulada.")
         return
 
     total_paints = 0

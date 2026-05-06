@@ -1,5 +1,6 @@
 import re
 import csv
+import os
 import shutil
 from pathlib import Path
 
@@ -10,6 +11,9 @@ CSV_PATH = Path("output/resultados.csv")
 LIMPAR_FINAL_ANTES = True
 
 FINAL_DIR.mkdir(parents=True, exist_ok=True)
+
+# No modo incremental, só processa arquivos com stem canônico (sem sufixos intermediários)
+RENOMEAR_FINAL_CANONICAL_ONLY = os.getenv("RENOMEAR_FINAL_CANONICAL_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 # Importa leitor unificado de código
 from ler_codigo import ler_codigo_unico
@@ -78,6 +82,13 @@ def main():
     if not seg_imgs:
         print(f"ERRO: nenhuma imagem em {SEG_DIR}")
         return
+
+    # No modo incremental, filtra apenas arquivos com stem canônico
+    if RENOMEAR_FINAL_CANONICAL_ONLY:
+        def _is_canonical(p: Path) -> bool:
+            s = p.stem
+            return " - " not in s and not s.endswith("_sr")
+        seg_imgs = [p for p in seg_imgs if _is_canonical(p)]
 
     if LIMPAR_FINAL_ANTES and FINAL_DIR.exists():
         shutil.rmtree(FINAL_DIR, ignore_errors=True)

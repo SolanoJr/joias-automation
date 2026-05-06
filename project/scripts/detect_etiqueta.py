@@ -2,6 +2,7 @@ from pathlib import Path
 import cv2
 import pytesseract
 import re
+import os
 
 # ===== CONFIG =====
 INPUT_DIR = Path("input_raw/fotos_originais")
@@ -25,6 +26,10 @@ MIN_H = 15
 PAD_CROP_RATIO = 0.10
 PAD_ERASE_PX = 8
 ENABLE_PAINT_OCR_FALLBACK = True
+
+# Respeita variáveis de cache incremental definidas pelo pipeline
+DETECT_SKIP_BY_EXISTENCE = os.getenv("DETECT_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+DETECT_SKIP_IF_UPTODATE = os.getenv("DETECT_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 # ===================
 
@@ -275,6 +280,14 @@ def main():
         print(f"ERRO: nenhuma imagem em {INPUT_DIR}")
         return
 
+    # Respeita PROCESS_LIMIT definido pelo pipeline no modo teste rápido
+    process_limit_env = os.getenv("PROCESS_LIMIT", "").strip()
+    if process_limit_env.isdigit():
+        limit = int(process_limit_env)
+        if limit > 0:
+            imgs = imgs[:limit]
+            print(f"PROCESS_LIMIT={limit}: processando {len(imgs)} imagem(ns)")
+
     if USE_LISTA_REPROCESSAR and LISTA_REPROCESSAR.exists():
         brutos = [ln.strip() for ln in LISTA_REPROCESSAR.read_text(encoding="utf-8").splitlines()]
         lista_nomes = {n for n in brutos if n and not n.startswith("#")}
@@ -285,6 +298,19 @@ def main():
     print("Detectando etiqueta + paint (AABB) e gerando crops + sem_etiqueta...\n")
 
     for img_path in imgs:
+        # Verifica cache incremental: pula se saída sem_etiqueta já existe
+        out_sem_check = OUT_SEM / f"{img_path.stem}.jpg"
+        if DETECT_SKIP_BY_EXISTENCE and out_sem_check.exists():
+            print(f"{img_path.name} -> pulado (cache_hit: sem_etiqueta já existe)")
+            continue
+        if DETECT_SKIP_IF_UPTODATE and out_sem_check.exists():
+            try:
+                if out_sem_check.stat().st_mtime >= img_path.stat().st_mtime:
+                    print(f"{img_path.name} -> pulado (cache_hit: sem_etiqueta atualizado)")
+                    continue
+            except Exception:
+                pass
+
         img = cv2.imread(str(img_path))
         if img is None:
             print(f"Falha ao ler: {img_path.name}")

@@ -158,8 +158,10 @@ def _segmentar_e_renderizar(
     if not ENABLE_ENSEMBLE_SEGMENTATION or len(ENSEMBLE_MODELS) <= 1:
         # Modo single model (padrão)
         try:
+            model_name = ENSEMBLE_MODELS[0].strip() if ENSEMBLE_MODELS else "isnet-general-use"
+            single_session = new_session(model_name)
             img_para_rembg = _downscale_rapido(img_original, max_side_override=max_side_tentativa)
-            rembg_output = remove(img_para_rembg, session=session)
+            rembg_output = remove(img_para_rembg, session=single_session)
         except Exception as e:
             logging.error(f"Erro no rembg {imagem_path.name}: {e}")
             return None, "erro_rembg"

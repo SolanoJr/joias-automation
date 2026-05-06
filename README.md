@@ -69,14 +69,22 @@ Para adicionar features ou otimizações:
 ## 📦 Dependências Principais
 
 - `ultralytics` - YOLO para detecção
-- `rembg` - segmentação de fundo
-- `pytesseract` - OCR
+- `rembg` + `onnxruntime` - segmentação de fundo (isnet + u2net)
+- `pytesseract` - OCR (requer Tesseract-OCR instalado no sistema)
 - `opencv-python` - processamento de imagem
 
-Veja `project/requirements.txt` para lista completa.
+Veja `project/requirements.txt` para lista completa com versões fixadas.
+
+## ⚠️ Pré-requisito do Sistema
+
+**Tesseract-OCR** deve estar instalado separadamente:
+- Windows: https://github.com/UB-Mannheim/tesseract/wiki
+- Linux: `sudo apt install tesseract-ocr`
+- Mac: `brew install tesseract`
 
 ## 📝 Notas
 
 - `project/` pode ser copiado como um projeto independente
 - Pastas ao redor servem como repositório do conhecimento/histórico
 - `temp/` contém backups e versões antigas (seguro remover)
+- `BUGS_CORRIGIDOS.md` — lista de bugs corrigidos na última sessão

@@ -297,34 +297,6 @@ def _calcular_zoom_ocr_adaptativo(img: np.ndarray) -> float:
 
 def _preprocessar_adaptativo(img: np.ndarray) -> list[np.ndarray]:
     """
-    Gera variantes de pré-processamento adaptativo para OCR.
-    Retorna lista de imagens processadas.
-    """
-    if not ENABLE_ADAPTIVE_PREPROCESSING:
-        return []
-    
-    variantes = []
-    
-    # CLAHE básico
-    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=(CLAHE_TILE_SIZE, CLAHE_TILE_SIZE))
-    clahe_img = clahe.apply(img)
-    variantes.append(clahe_img)
-    
-    # CLAHE + sharpening
-    kernel_sharp = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-    sharpened = cv2.filter2D(clahe_img, -1, kernel_sharp)
-    variantes.append(sharpened)
-    
-    # Morphological closing para conectar caracteres quebrados
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    closed = cv2.morphologyEx(clahe_img, cv2.MORPH_CLOSE, kernel_close)
-    variantes.append(closed)
-    
-    return variantes
-
-
-def _preprocessar_adaptativo(img: np.ndarray) -> list[np.ndarray]:
-    """
     Gera variantes pré-processadas de uma imagem para melhor OCR.
     Inclui CLAHE + sharpening para imagens pequenas.
     """

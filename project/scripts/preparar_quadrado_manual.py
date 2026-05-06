@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 from PIL import Image, ImageOps
 
@@ -10,6 +11,9 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 SIZE = 1200
 CONTENT_RATIO = 0.88
 LIMPAR_DESTINO = True
+
+PREP_SKIP_BY_EXISTENCE = os.getenv("PREP_SKIP_BY_EXISTENCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+PREP_SKIP_IF_UPTODATE = os.getenv("PREP_SKIP_IF_UPTODATE", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def preparar(imagem_path: Path):
@@ -37,7 +41,7 @@ def main():
         print(f"ERRO: não existe {INPUT_DIR}")
         return
 
-    if LIMPAR_DESTINO:
+    if LIMPAR_DESTINO and not PREP_SKIP_BY_EXISTENCE and not PREP_SKIP_IF_UPTODATE:
         for p in OUTPUT_DIR.glob("*.jpg"):
             p.unlink(missing_ok=True)
 
@@ -48,10 +52,24 @@ def main():
 
     ok = 0
     for p in imgs:
+        out_path = OUTPUT_DIR / p.name
+
+        if PREP_SKIP_BY_EXISTENCE and out_path.exists():
+            ok += 1
+            continue
+
+        if PREP_SKIP_IF_UPTODATE and out_path.exists():
+            try:
+                if out_path.stat().st_mtime >= p.stat().st_mtime:
+                    ok += 1
+                    continue
+            except Exception:
+                pass
+
         out = preparar(p)
         if out is None:
             continue
-        out.save(OUTPUT_DIR / p.name, quality=95)
+        out.save(out_path, quality=95)
         ok += 1
 
     print(f"Quadrado manual OK: {ok}/{len(imgs)}")
