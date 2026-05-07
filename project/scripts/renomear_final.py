@@ -4,6 +4,8 @@ import os
 import shutil
 import base64
 import io
+import numpy as np
+import cv2
 from pathlib import Path
 
 # Pastas
@@ -16,6 +18,77 @@ FINAL_DIR.mkdir(parents=True, exist_ok=True)
 
 # No modo incremental, só processa arquivos com stem canônico (sem sufixos intermediários)
 RENOMEAR_FINAL_CANONICAL_ONLY = os.getenv("RENOMEAR_FINAL_CANONICAL_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+# ===== SEGUNDA PASSAGEM REMBG =====
+# Aplica rembg uma segunda vez na imagem final para remover papel residual.
+# Só salva o resultado se o fundo ficou significativamente mais limpo (≥15% mais branco).
+# Desabilite com REMBG_SEGUNDA_PASSAGEM=0 se estiver muito lento.
+REMBG_SEGUNDA_PASSAGEM = os.getenv("REMBG_SEGUNDA_PASSAGEM", "1").strip().lower() in {"1", "true", "yes", "on"}
+REMBG_SEGUNDA_PASSAGEM_THRESHOLD = float(os.getenv("REMBG_SEGUNDA_PASSAGEM_THRESHOLD", "0.15"))
+
+
+def _white_ratio(img_rgb: np.ndarray) -> float:
+    """Fração de pixels quase-brancos (>245) — proxy de fundo limpo."""
+    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY) if img_rgb.ndim == 3 else img_rgb
+    return float((gray > 245).mean())
+
+
+def _aplicar_segunda_passagem_rembg(img_pil: "Image.Image") -> "Image.Image":
+    """
+    Aplica rembg uma segunda vez na imagem final (já em canvas branco).
+    Retorna a imagem melhorada se o fundo ficou ≥15% mais limpo,
+    caso contrário retorna a imagem original sem alteração.
+    """
+    if not REMBG_SEGUNDA_PASSAGEM:
+        return img_pil
+
+    try:
+        from rembg import new_session, remove
+        from PIL import Image
+        from io import BytesIO
+
+        arr_antes = np.array(img_pil)
+        white_antes = _white_ratio(arr_antes)
+
+        # Só tenta se há papel residual significativo (fundo não está limpo)
+        if white_antes >= 0.90:
+            return img_pil  # já está limpo, não precisa de segunda passagem
+
+        session = new_session("isnet-general-use")
+        rembg_out = remove(img_pil.convert("RGBA"), session=session)
+
+        if isinstance(rembg_out, (bytes, bytearray)):
+            sem_fundo = Image.open(BytesIO(rembg_out)).convert("RGBA")
+        elif isinstance(rembg_out, Image.Image):
+            sem_fundo = rembg_out.convert("RGBA")
+        else:
+            sem_fundo = Image.fromarray(np.array(rembg_out)).convert("RGBA")
+
+        arr_sf = np.array(sem_fundo)
+        alpha = arr_sf[:, :, 3]
+        mask = alpha > 10
+
+        if mask.sum() == 0:
+            return img_pil
+
+        # Renderiza no canvas branco do mesmo tamanho
+        w_orig, h_orig = img_pil.size
+        fundo = Image.new("RGBA", (w_orig, h_orig), (255, 255, 255, 255))
+        fundo.paste(sem_fundo, (0, 0), sem_fundo)
+        resultado = fundo.convert("RGB")
+
+        arr_depois = np.array(resultado)
+        white_depois = _white_ratio(arr_depois)
+
+        # Só aceita se melhorou significativamente
+        if white_depois - white_antes >= REMBG_SEGUNDA_PASSAGEM_THRESHOLD:
+            return resultado
+
+        return img_pil
+
+    except Exception:
+        return img_pil  # qualquer erro: mantém original
+
 
 # Importa leitor unificado de código
 from ler_codigo import ler_codigo_unico
@@ -208,6 +281,23 @@ def sufixo_por_fonte(fonte: str | None) -> str:
     return ""
 
 
+def _salvar_com_segunda_passagem(src: Path, dest: Path) -> None:
+    """
+    Copia a imagem para dest, aplicando segunda passagem rembg se necessário.
+    Usa PIL para salvar (não shutil.copy2) quando a segunda passagem é aplicada.
+    """
+    if not REMBG_SEGUNDA_PASSAGEM:
+        shutil.copy2(src, dest)
+        return
+    try:
+        from PIL import Image
+        img_pil = Image.open(src).convert("RGB")
+        resultado = _aplicar_segunda_passagem_rembg(img_pil)
+        resultado.save(dest, quality=95)
+    except Exception:
+        shutil.copy2(src, dest)  # fallback seguro
+
+
 def main():
     if not SEG_DIR.exists():
         print(f"ERRO: não existe {SEG_DIR}")
@@ -261,20 +351,20 @@ def main():
                     out_name = nome_unico(FINAL_DIR, codigo_saida)
                     dest = FINAL_DIR / out_name
 
-                shutil.copy2(img, dest)
+                _salvar_com_segunda_passagem(img, dest)
                 status = "JA_CORRETO"
                 ok += 1
             else:
                 out_name = nome_unico(FINAL_DIR, codigo_saida)
                 dest = FINAL_DIR / out_name
-                shutil.copy2(img, dest)
+                _salvar_com_segunda_passagem(img, dest)
                 status = "RENOMEADO"
                 ok += 1
         else:
             base_limpo = normalizar_base_para_nome(base)
             out_name = nome_unico(FINAL_DIR, f"SEMCOD_{base_limpo}")
             dest = FINAL_DIR / out_name
-            shutil.copy2(img, dest)
+            shutil.copy2(img, dest)  # SEMCOD: não aplica segunda passagem
             status = "SEM_CODIGO_COPIADO"
             sem_codigo += 1
 
