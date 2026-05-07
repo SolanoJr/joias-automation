@@ -284,7 +284,13 @@ def _normalizar_codigo(texto: str | None) -> str | None:
     # Fallback para códigos alfanuméricos típicos de paint/etiqueta (ex: CR3904506, BR1204039)
     # Aceita prefixo de 1-3 letras + 4-9 dígitos
     # Usa \b para garantir boundary correto (funciona bem com espaços)
+    # Também tenta extrair quando o código está grudado em outra palavra (ex: "UTABR1204039")
+    # — procura o padrão mais longo que começa com 1-3 letras seguidas de dígitos
     alnum_candidatos = re.findall(r"\b[A-Z]{1,3}[0-9]{4,9}\b", texto_limpo)
+    if not alnum_candidatos:
+        # Fallback: extrai qualquer ocorrência de 1-3 letras + 4-9 dígitos, mesmo sem boundary
+        # Ordena por comprimento decrescente para pegar o mais específico
+        alnum_candidatos = re.findall(r"(?<![0-9])[A-Z]{1,3}[0-9]{4,9}(?![0-9A-Z])", texto_limpo)
     if alnum_candidatos:
         return max(alnum_candidatos, key=len)
 
@@ -620,13 +626,13 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: f
             limite_chamadas = min(MAX_OCR_CALLS_ETIQUETA, 30)
         else:
             psm_configs = psm_full
-            escalas = (1.8, 2.5, 3.0)
+            escalas = (1.8, 2.5, 3.0, 4.0)  # 4.0 recupera etiquetas com texto pequeno
             usar_rotacao_180 = False
             usar_rotacao_ccw = True
             limite_chamadas = min(MAX_OCR_CALLS_ETIQUETA, 45)
     else:
         psm_configs = psm_full
-        escalas = (1.8, 2.5, 3.0)
+        escalas = (1.8, 2.5, 3.0, 4.0)
         usar_rotacao_180 = False
         usar_rotacao_ccw = True
         limite_chamadas = MAX_OCR_CALLS_ETIQUETA

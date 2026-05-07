@@ -240,7 +240,8 @@ def testar_logica():
         ("BR1204039",                    "BR1204039"),
         ("br1204039",                    "BR1204039"),   # lowercase
         ("  CR3984506  ",                "CR3984506"),   # espaços
-        ("TURAL ATA\nBR1204039\n| 63d", "BR1204039"),   # texto sujo OCR
+        ("TURAL ATA\nBR1204039\n| 63d", "BR1204039"),   # texto sujo OCR (newline separado)
+        ("UTA\nBR1204039",              "BR1204039"),   # prefixo grudado antes do newline
         ("1200090006",                   "1200090006"),  # 10 dígitos
         ("texto 1200090006 mais",        "1200090006"),  # dígitos no meio
         (None,                           None),

@@ -26,10 +26,17 @@ def _thumb_base64(img_path: Path, size: int = 50) -> str:
     try:
         import cv2
         import numpy as np
-        img = cv2.imread(str(img_path))
+        # Lê com flag IMREAD_REDUCED para evitar crash em imagens grandes
+        img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
         if img is None:
             return ""
         h, w = img.shape[:2]
+        # Downscale antes de processar para evitar uso excessivo de memória
+        max_read = 400
+        if max(h, w) > max_read:
+            scale = max_read / max(h, w)
+            img = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+            h, w = img.shape[:2]
         # Redimensiona mantendo proporção
         if h > w:
             new_h, new_w = size, max(1, int(w * size / h))
@@ -41,10 +48,13 @@ def _thumb_base64(img_path: Path, size: int = 50) -> str:
         y0 = (size - new_h) // 2
         x0 = (size - new_w) // 2
         canvas[y0:y0 + new_h, x0:x0 + new_w] = thumb
-        ok, buf = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        ok, buf = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 60])
         if not ok:
             return ""
-        return base64.b64encode(buf.tobytes()).decode("ascii")
+        result = base64.b64encode(buf.tobytes()).decode("ascii")
+        # Libera memória explicitamente
+        del img, thumb, canvas, buf
+        return result
     except Exception:
         return ""
 
@@ -191,13 +201,10 @@ def normalizar_base_para_nome(base: str) -> str:
 
 
 def sufixo_por_fonte(fonte: str | None) -> str:
-    fonte = (fonte or "").lower()
-    if "paint" in fonte:
-        return "_p"
-    if "etiqueta" in fonte or "barcode" in fonte:
-        return "_e"
-    if "sem_etiqueta" in fonte or "ocr_sem_etiqueta" in fonte:
-        return "_se"
+    """
+    Retorna sufixo vazio — o nome final é apenas o código.
+    Sufixos (_p, _e) são usados apenas nos intermediários (etapa 5).
+    """
     return ""
 
 

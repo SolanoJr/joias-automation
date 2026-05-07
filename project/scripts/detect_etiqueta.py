@@ -189,7 +189,7 @@ def _refinar_crop_paint(crop_bgr):
 def _crop_paint_valido(crop_bgr) -> bool:
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
     dark_ratio = float((gray < 230).mean())
-    if dark_ratio < 0.01:
+    if dark_ratio < 0.005:  # era 0.01 — mais permissivo para paints claros
         return False
     return _tem_digitos_no_crop(crop_bgr)
 
@@ -199,9 +199,9 @@ def _crop_paint_valido_flex(crop_bgr) -> bool:
     h, w = gray.shape
     dark_ratio = float((gray < 230).mean())
     aspect = w / float(max(1, h))
-    if dark_ratio < 0.015:
+    if dark_ratio < 0.008:  # era 0.015 — mais permissivo
         return False
-    if aspect < 2.0:
+    if aspect < 1.5:  # era 2.0 — aceita paints menos alongados
         return False
     return True
 

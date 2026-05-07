@@ -18,10 +18,10 @@ OUTPUT_DIR = Path("output/5_segmentado_rembg")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SIZE = 1024
-MAX_SCALE = 0.88   # joia ocupa até 88% do canvas (era 0.75 — deixava muito espaço vazio)
-MARGIN_RATIO = 0.04  # margem menor para joia mais centralizada e maior (era 0.06)
-MARGIN_MIN = 16
-MARGIN_MAX = 80
+MAX_SCALE = 0.92   # joia ocupa até 92% do canvas — mais zoom, mais visível
+MARGIN_RATIO = 0.03  # margem mínima proporcional
+MARGIN_MIN = 12
+MARGIN_MAX = 60
 ALPHA_THRESHOLD = 10
 DILATE_ITERATIONS = 1
 FALLBACK_ORIGINAL_SE_FALHAR = True
@@ -137,26 +137,27 @@ def _downscale_rapido(img: Image.Image, max_side_override: int | None = None) ->
 
 def _calcular_zoom_adaptativo(bbox_area_ratio: float) -> float:
     """
-    Calcula fator de zoom baseado no tamanho relativo da joia.
-    Garante que joias pequenas fiquem maiores e mais centralizadas no canvas.
+    Calcula fator de zoom para garantir que a joia preencha bem o canvas.
+    Objetivo: joia visível, centralizada, sem cortes.
     """
     if not ENABLE_ADAPTIVE_ZOOM or bbox_area_ratio <= 0:
         return 1.0
 
-    # Joia grande (>10% do canvas): sem zoom extra
-    if bbox_area_ratio >= 0.10:
+    # Joia grande (>15% do canvas): sem zoom extra — já está bem visível
+    if bbox_area_ratio >= 0.15:
         return 1.0
-    # Joia média (5-10%): zoom leve
-    elif bbox_area_ratio >= 0.05:
-        return 1.2
-    # Joia pequena (2-5%): zoom moderado
+    # Joia média-grande (8-15%): zoom leve
+    elif bbox_area_ratio >= 0.08:
+        return 1.15
+    # Joia média (4-8%): zoom moderado
+    elif bbox_area_ratio >= 0.04:
+        return 1.4
+    # Joia pequena (2-4%): zoom significativo
     elif bbox_area_ratio >= 0.02:
-        return min(ADAPTIVE_ZOOM_MULTIPLIER, 1.5)
-    # Joia muito pequena (<2%): zoom agressivo
-    elif bbox_area_ratio >= 0.01:
-        return ADAPTIVE_ZOOM_MULTIPLIER
+        return min(ADAPTIVE_ZOOM_MULTIPLIER, 1.8)
+    # Joia muito pequena (<2%): zoom máximo
     else:
-        return 1.0
+        return ADAPTIVE_ZOOM_MULTIPLIER
 
 
 def _segmentar_e_renderizar(
@@ -268,15 +269,18 @@ def _segmentar_e_renderizar(
 
     joia = sem_fundo.crop((x1, y1, x2, y2))
     max_size = int(SIZE * MAX_SCALE)
-    joia.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
-    # ===== ZOOM ADAPTATIVO: Upscale joias pequenas para melhor OCR =====
+    # ===== ZOOM ADAPTATIVO: Upscale joias pequenas para ficarem mais visíveis =====
     zoom_factor = _calcular_zoom_adaptativo(bbox_area_ratio)
     if zoom_factor > 1.0:
         novo_w = int(joia.width * zoom_factor)
         novo_h = int(joia.height * zoom_factor)
         joia = joia.resize((novo_w, novo_h), Image.Resampling.LANCZOS)
 
+    # Garante que a joia cabe no canvas sem cortar (thumbnail respeita proporção)
+    joia.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+
+    # Centralização perfeita no canvas branco quadrado
     fundo = Image.new("RGBA", (SIZE, SIZE), (255, 255, 255, 255))
     x = (SIZE - joia.width) // 2
     y = (SIZE - joia.height) // 2
