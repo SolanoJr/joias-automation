@@ -340,6 +340,56 @@ def main():
         res = model.predict(source=img, conf=CONF_MIN, verbose=False, device=DEVICE)[0]
         names = res.names  # {0:'etiqueta', 1:'paint'} (esperado)
 
+        # ── ROTAÇÃO AUTOMÁTICA ──────────────────────────────────────────────
+        # Se não detectou etiqueta com boa confiança, testa rotações.
+        # Imagens deitadas (EXIF não corrigido) precisam de 90° ou 270°.
+        def _melhor_conf_etiqueta(resultado) -> float:
+            if resultado.boxes is None:
+                return 0.0
+            return max(
+                (float(b.conf[0]) for b in resultado.boxes
+                 if resultado.names.get(int(b.cls[0])) == "etiqueta"),
+                default=0.0,
+            )
+
+        def _melhor_conf_qualquer(resultado) -> float:
+            """Retorna a maior confiança de qualquer detecção (etiqueta ou paint)."""
+            if resultado.boxes is None:
+                return 0.0
+            return max((float(b.conf[0]) for b in resultado.boxes), default=0.0)
+
+        CONF_ETIQUETA_OK = 0.50   # confiança mínima para considerar etiqueta detectada
+        CONF_QUALQUER_OK = 0.60   # se já há qualquer detecção boa, não rotaciona
+
+        # Só testa rotações se não há nenhuma detecção boa na orientação original
+        if _melhor_conf_qualquer(res) < CONF_QUALQUER_OK and _melhor_conf_etiqueta(res) < CONF_ETIQUETA_OK:
+            rotacoes_cv = [
+                ("rot90",  cv2.ROTATE_90_CLOCKWISE),
+                ("rot270", cv2.ROTATE_90_COUNTERCLOCKWISE),
+                ("rot180", cv2.ROTATE_180),
+            ]
+            melhor_res = res
+            melhor_conf = _melhor_conf_etiqueta(res)
+            melhor_rot = None
+
+            for rot_nome, rot_code in rotacoes_cv:
+                img_rot = cv2.rotate(img, rot_code)
+                res_rot = model.predict(source=img_rot, conf=CONF_MIN, verbose=False, device=DEVICE)[0]
+                conf_rot = _melhor_conf_etiqueta(res_rot)
+                if conf_rot > melhor_conf:
+                    melhor_conf = conf_rot
+                    melhor_res = res_rot
+                    melhor_rot = (rot_nome, img_rot)
+
+            if melhor_rot is not None:
+                rot_nome, img_rot = melhor_rot
+                print(f"  [rotação {rot_nome}] etiqueta conf={melhor_conf:.3f} — usando imagem rotacionada")
+                img = img_rot
+                h, w = img.shape[:2]
+                res = melhor_res
+                names = res.names
+        # ────────────────────────────────────────────────────────────────────
+
         # copiar original pra pintar retângulos brancos
         sem = img.copy()
 

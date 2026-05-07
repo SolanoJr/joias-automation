@@ -70,8 +70,8 @@ OCR_ETIQUETA_ADAPTIVE = os.getenv("OCR_ETIQUETA_ADAPTIVE", "1").strip().lower() 
 LER_CODIGO_CANONICAL_ONLY = os.getenv("LER_CODIGO_CANONICAL_ONLY", "0").strip().lower() in {"1", "true", "yes", "on"}
 CODE_READ_TIMEOUT_SIMPLE_S = float((os.getenv("CODE_READ_TIMEOUT_SIMPLE_S") or "5.0").strip() or "5.0")
 CODE_READ_TIMEOUT_INTENSIVO_S = float((os.getenv("CODE_READ_TIMEOUT_INTENSIVO_S") or "12.0").strip() or "12.0")
-CODE_READ_TIMEOUT_OCR_S = float((os.getenv("CODE_READ_TIMEOUT_OCR_S") or "15.0").strip() or "15.0")
-CODE_READ_TIMEOUT_ITEM_S = float((os.getenv("CODE_READ_TIMEOUT_ITEM_S") or "35.0").strip() or "35.0")
+CODE_READ_TIMEOUT_OCR_S = float((os.getenv("CODE_READ_TIMEOUT_OCR_S") or "25.0").strip() or "25.0")
+CODE_READ_TIMEOUT_ITEM_S = float((os.getenv("CODE_READ_TIMEOUT_ITEM_S") or "45.0").strip() or "45.0")
 
 # ===== OCR PREPROCESSING & ENHANCEMENT =====
 ENABLE_ADAPTIVE_PREPROCESSING = os.getenv("ENABLE_ADAPTIVE_PREPROCESSING", "1").strip().lower() in {"1", "true", "yes", "on"}
@@ -626,13 +626,13 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: f
             limite_chamadas = min(MAX_OCR_CALLS_ETIQUETA, 30)
         else:
             psm_configs = psm_full
-            escalas = (1.8, 2.5, 3.0, 4.0)  # 4.0 recupera etiquetas com texto pequeno
+            escalas = (1.0, 1.8, 2.5, 3.0, 4.0)  # 1.0 primeiro — funciona para etiquetas grandes
             usar_rotacao_180 = False
             usar_rotacao_ccw = True
-            limite_chamadas = min(MAX_OCR_CALLS_ETIQUETA, 45)
+            limite_chamadas = min(MAX_OCR_CALLS_ETIQUETA, 60)
     else:
         psm_configs = psm_full
-        escalas = (1.8, 2.5, 3.0, 4.0)
+        escalas = (1.0, 1.8, 2.5, 3.0, 4.0)
         usar_rotacao_180 = False
         usar_rotacao_ccw = True
         limite_chamadas = MAX_OCR_CALLS_ETIQUETA
@@ -961,8 +961,12 @@ def ler_codigo_unico(
     # Mais lento que barcode, mas funciona quando o código de barras está
     # danificado ou ilegível. Usa múltiplas orientações porque etiquetas
     # podem estar rotacionadas na foto.
+    # IMPORTANTE: se há etiquetas detectadas, sempre tenta OCR de texto —
+    # mesmo sem sinal do barcode, porque o barcode pode ser ilegível mas
+    # o texto impresso na etiqueta ainda é legível pelo OCR.
     sinal_util = _has_useful_signal(etiquetas, paints, has_partial_6plus, has_short_candidate)
-    if sinal_util and not _deadline_exceeded(item_deadline):
+    tem_etiqueta = bool(etiquetas)
+    if (sinal_util or tem_etiqueta) and not _deadline_exceeded(item_deadline):
         stage_ocr_deadline = _stage_deadline(item_deadline, CODE_READ_TIMEOUT_OCR_S)
         nivel_ocr_etiqueta = "baixa"
 
