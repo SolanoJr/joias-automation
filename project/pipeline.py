@@ -4,6 +4,7 @@ import argparse
 import subprocess
 import time
 import runpy
+import logging
 from pathlib import Path
 
 
@@ -23,19 +24,54 @@ INPUT_DIR = Path("input_raw/fotos_originais")
 LISTA_REPROCESSAR = Path("output/analysis/lista_reprocessar_sem_etiqueta.txt")
 INPROCESS_THRESHOLD_PADRAO = 20
 
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+LOG_FILE = Path("output/pipeline.log")
+
+
+def _setup_logging():
+    """Configura logging para console e arquivo (append mode)."""
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    logger = logging.getLogger("pipeline")
+    logger.setLevel(logging.DEBUG)
+
+    # Evita duplicar handlers se chamado mais de uma vez
+    if logger.handlers:
+        return logger
+
+    formatter = logging.Formatter(LOG_FORMAT)
+
+    # Handler de console
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    # Handler de arquivo (append)
+    fh = logging.FileHandler(LOG_FILE, mode="a", encoding="utf-8")
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+
+    return logger
+
+
+log = _setup_logging()
+
+
 def run(cmd, msg, env_extra=None, step_idx: int | None = None, step_total: int | None = None):
     prefixo = ""
     if step_idx is not None and step_total is not None:
         prefixo = f"[{step_idx}/{step_total}] "
 
-    print(f"{prefixo}{msg}")
+    log.info(f"{prefixo}{msg}")
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
     t0 = time.perf_counter()
     subprocess.run(cmd, check=True, env=env)
     dt = time.perf_counter() - t0
-    print(f"{prefixo}Concluído em {dt:.1f}s")
+    log.info(f"{prefixo}Concluído em {dt:.1f}s")
 
 
 def run_inprocess(script_path: str, msg, env_extra=None, step_idx: int | None = None, step_total: int | None = None):
@@ -43,7 +79,7 @@ def run_inprocess(script_path: str, msg, env_extra=None, step_idx: int | None = 
     if step_idx is not None and step_total is not None:
         prefixo = f"[{step_idx}/{step_total}] "
 
-    print(f"{prefixo}{msg}")
+    log.info(f"{prefixo}{msg}")
     old_env: dict[str, str | None] = {}
     if env_extra:
         for k, v in env_extra.items():
@@ -74,7 +110,7 @@ def run_inprocess(script_path: str, msg, env_extra=None, step_idx: int | None = 
                     os.environ[k] = antigo
 
     dt = time.perf_counter() - t0
-    print(f"{prefixo}Concluído em {dt:.1f}s")
+    log.info(f"{prefixo}Concluído em {dt:.1f}s")
 
 
 def _estimar_total_entrada(modo_full: bool, limite_teste: int) -> int:
@@ -93,6 +129,23 @@ def _estimar_total_entrada(modo_full: bool, limite_teste: int) -> int:
     return len(imgs)
 
 
+def _listar_imagens_entrada(modo_full: bool, limite_teste: int) -> list[Path]:
+    """Retorna a lista de imagens que seriam processadas."""
+    imgs = sorted([*INPUT_DIR.glob("*.jpg"), *INPUT_DIR.glob("*.jpeg"), *INPUT_DIR.glob("*.png")])
+
+    usar_lista = (os.getenv("USE_LISTA_REPROCESSAR", "0").strip().lower() in {"1", "true", "yes", "on"})
+    if usar_lista and LISTA_REPROCESSAR.exists():
+        brutos = [ln.strip() for ln in LISTA_REPROCESSAR.read_text(encoding="utf-8").splitlines()]
+        lista_nomes = {n for n in brutos if n and not n.startswith("#")}
+        if lista_nomes:
+            imgs = [p for p in imgs if p.name in lista_nomes]
+
+    if not modo_full and limite_teste > 0:
+        imgs = imgs[:limite_teste]
+
+    return imgs
+
+
 def limpar_saidas():
     for pasta in PASTAS_SAIDA:
         pasta.mkdir(parents=True, exist_ok=True)
@@ -102,6 +155,33 @@ def limpar_saidas():
 
     if CSV_SAIDA.exists():
         CSV_SAIDA.unlink(missing_ok=True)
+
+
+def dry_run(modo_full: bool, limite_teste: int):
+    """Lista imagens que seriam processadas e estima tempo. Não processa nada."""
+    imgs = _listar_imagens_entrada(modo_full, limite_teste)
+    total = len(imgs)
+    SECS_PER_IMAGE = 5
+
+    log.info("=== DRY RUN — nenhum arquivo será processado ===")
+    log.info(f"Pasta de entrada: {INPUT_DIR}")
+    log.info(f"Modo: {'completo' if modo_full else f'teste rápido (limite={limite_teste})'}")
+    log.info(f"Total de imagens encontradas: {total}")
+
+    if total == 0:
+        log.warning(f"Nenhuma imagem encontrada em {INPUT_DIR}")
+    else:
+        for i, img in enumerate(imgs, 1):
+            log.info(f"  [{i:>4}/{total}] {img.name}")
+
+        tempo_estimado_s = total * SECS_PER_IMAGE
+        minutos = tempo_estimado_s // 60
+        segundos = tempo_estimado_s % 60
+        log.info(f"Tempo estimado: ~{tempo_estimado_s}s ({minutos}m{segundos:02d}s) a ~{SECS_PER_IMAGE}s/imagem")
+
+    log.info("=== FIM DO DRY RUN ===")
+    sys.exit(0)
+
 
 def main(
     modo_full: bool = False,
@@ -113,18 +193,18 @@ def main(
     t_inicio = time.perf_counter()
 
     if LIMPAR_SAIDAS and not incremental:
-        print("Limpando saídas anteriores...")
+        log.info("Limpando saídas anteriores...")
         limpar_saidas()
     elif incremental:
-        print("Modo incremental: preservando saídas e usando cache por arquivo.")
+        log.info("Modo incremental: preservando saídas e usando cache por arquivo.")
 
     detect_env = {}
     seg_env = {}
     if not modo_full and limite_teste > 0:
         detect_env["PROCESS_LIMIT"] = str(limite_teste)
-        print(f"Modo teste rápido: limitando entrada para {limite_teste} arquivo(s)")
+        log.info(f"Modo teste rápido: limitando entrada para {limite_teste} arquivo(s)")
     else:
-        print("Modo completo: processando todos os arquivos")
+        log.info("Modo completo: processando todos os arquivos")
 
     if incremental:
         detect_env["DETECT_SKIP_IF_UPTODATE"] = "1"
@@ -140,7 +220,7 @@ def main(
     qtd_estimado = _estimar_total_entrada(modo_full, limite_teste)
     use_inprocess = mode == "inprocess" or (mode == "auto" and qtd_estimado <= inprocess_threshold)
     exec_desc = "in-process" if use_inprocess else "subprocess"
-    print(f"Modo de execução: {exec_desc} (itens estimados={qtd_estimado}, threshold={inprocess_threshold})")
+    log.info(f"Modo de execução: {exec_desc} (itens estimados={qtd_estimado}, threshold={inprocess_threshold})")
 
     runner = run_inprocess if use_inprocess else run
 
@@ -187,15 +267,15 @@ def main(
                 "Validando regressão de saídas...",
             )
         else:
-            print(
+            log.warning(
                 "Baseline de validação não encontrado. "
                 "Crie com: python scripts/validar_saidas.py --mode create-baseline"
             )
     else:
-        print("Validação automática pulada no modo teste rápido (use --full para validar baseline).")
+        log.info("Validação automática pulada no modo teste rápido (use --full para validar baseline).")
 
     dt_total = time.perf_counter() - t_inicio
-    print(f"Pipeline finalizado em {dt_total:.1f}s.")
+    log.info(f"Pipeline finalizado em {dt_total:.1f}s.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -204,12 +284,16 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["auto", "subprocess", "inprocess"], default="auto", help="Modo de execução do pipeline")
     parser.add_argument("--inprocess-threshold", type=int, default=INPROCESS_THRESHOLD_PADRAO, help=f"Threshold de itens para auto usar in-process (padrão: {INPROCESS_THRESHOLD_PADRAO})")
     parser.add_argument("--incremental", action="store_true", help="Preserva saídas e ativa cache de detecção/segmentação para reruns rápidos")
+    parser.add_argument("--dry-run", action="store_true", help="Lista imagens que seriam processadas e estima tempo, sem processar nada")
     args = parser.parse_args()
 
-    main(
-        modo_full=args.full,
-        limite_teste=args.limit,
-        mode=args.mode,
-        inprocess_threshold=args.inprocess_threshold,
-        incremental=args.incremental,
-    )
+    if args.dry_run:
+        dry_run(modo_full=args.full, limite_teste=args.limit)
+    else:
+        main(
+            modo_full=args.full,
+            limite_teste=args.limit,
+            mode=args.mode,
+            inprocess_threshold=args.inprocess_threshold,
+            incremental=args.incremental,
+        )

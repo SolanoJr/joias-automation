@@ -88,6 +88,89 @@ Principais:
 
 Ver `requirements.txt` para lista completa com versões fixadas.
 
+## 🌍 Variáveis de Ambiente
+
+Todas as variáveis aceitam `1`/`true`/`yes`/`on` como verdadeiro e `0`/`false` como falso (onde aplicável).
+
+### Pipeline (`pipeline.py`)
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `USE_LISTA_REPROCESSAR` | `0` | Se `1`, processa apenas os arquivos listados em `output/analysis/lista_reprocessar_sem_etiqueta.txt` |
+
+### Detecção YOLO (`detect_etiqueta.py`)
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `YOLO_CONF_MIN` | `0.25` | Confiança mínima para aceitar uma detecção YOLO |
+| `PROCESS_LIMIT` | `""` | Limita o número de imagens processadas (definido automaticamente pelo pipeline no modo teste) |
+| `DETECT_SKIP_BY_EXISTENCE` | `0` | Pula detecção se o arquivo de saída já existe (modo incremental) |
+| `DETECT_SKIP_IF_UPTODATE` | `0` | Pula detecção se o arquivo de saída é mais recente que a entrada (modo incremental) |
+
+### Leitura de código OCR (`ler_codigo.py`)
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `CODE_READER_FAST` | `0` | Reduz o número máximo de chamadas OCR (mais rápido, menor precisão) |
+| `ALLOW_SHORT_BARCODE` | `0` | Aceita barcodes com menos de 10 dígitos (mínimo `SHORT_BARCODE_MIN_DIGITS`) |
+| `ENABLE_PAINT_INTENSIVO` | `1` | Ativa OCR intensivo no paint (mais variantes de pré-processamento) |
+| `PRIORITIZE_BARCODE_FIRST` | `0` | Tenta barcode antes do OCR de paint no estágio 1 |
+| `OCR_ETIQUETA_ADAPTIVE` | `1` | Adapta número de chamadas OCR ao nível de confiança da etiqueta |
+| `LER_CODIGO_CANONICAL_ONLY` | `0` | Processa apenas arquivos com nome canônico (modo incremental) |
+| `CODE_READ_TIMEOUT_SIMPLE_S` | `5.0` | Budget de tempo (segundos) para o estágio 1 (simples) |
+| `CODE_READ_TIMEOUT_INTENSIVO_S` | `12.0` | Budget de tempo (segundos) para o estágio 2 (intensivo) |
+| `CODE_READ_TIMEOUT_OCR_S` | `15.0` | Budget de tempo (segundos) para o estágio 3 (OCR de etiqueta) |
+| `CODE_READ_TIMEOUT_ITEM_S` | `35.0` | Budget de tempo total por imagem (todos os estágios) |
+| `ENABLE_ADAPTIVE_PREPROCESSING` | `1` | Ativa pré-processamento adaptativo (CLAHE + sharpening) |
+| `CLAHE_CLIP_LIMIT` | `2.0` | Parâmetro clipLimit do CLAHE |
+| `CLAHE_TILE_SIZE` | `8` | Tamanho do tile do CLAHE (pixels) |
+| `ENABLE_OCR_ADAPTIVE_ZOOM` | `1` | Amplia automaticamente imagens pequenas antes do OCR |
+| `OCR_ZOOM_THRESHOLD_SMALL` | `100` | Lado mínimo (px) para aplicar zoom `OCR_ZOOM_MULTIPLIER_SMALL` |
+| `OCR_ZOOM_THRESHOLD_MEDIUM` | `200` | Lado mínimo (px) para aplicar zoom `OCR_ZOOM_MULTIPLIER_MEDIUM` |
+| `OCR_ZOOM_MULTIPLIER_SMALL` | `2.0` | Fator de zoom para imagens muito pequenas |
+| `OCR_ZOOM_MULTIPLIER_MEDIUM` | `1.5` | Fator de zoom para imagens médias |
+| `OCR_CACHE_ENABLED` | `1` | Ativa cache de resultados OCR em `output/cache_ocr/` (SHA256) |
+
+### Segmentação (`segment_rembg.py`)
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `SEG_PARALLEL_WORKERS` | `2` | Número de workers paralelos para segmentação |
+| `SEG_MODEL` | `isnet-general-use` | Modelo rembg padrão (modo single) |
+| `SEG_FAST_MODE` | `1` | Redimensiona entrada para `SEG_FAST_MAX_SIDE` antes de segmentar |
+| `SEG_FAST_MAX_SIDE` | `1280` | Lado máximo (px) no modo rápido |
+| `SEG_ADAPTIVE_RETRY` | `1` | Tenta novamente com resolução maior se a segmentação falhar |
+| `SEG_ADAPTIVE_RETRY_MAX_SIDE` | `2048` | Lado máximo (px) na tentativa adaptativa |
+| `SEG_SKIP_BY_EXISTENCE` | `0` | Pula segmentação se o arquivo de saída já existe (modo incremental) |
+| `SEG_SKIP_IF_UPTODATE` | `0` | Pula segmentação se o arquivo de saída é mais recente que a entrada |
+| `SEG_ADAPTIVE_ZOOM` | `1` | Ativa zoom adaptativo antes da segmentação |
+| `SEG_ADAPTIVE_ZOOM_MULTIPLIER` | `1.5` | Fator de zoom adaptativo |
+| `ENABLE_ENSEMBLE_SEGMENTATION` | `0` | Ativa ensemble de modelos rembg (mais lento, mais preciso) |
+| `ENSEMBLE_MODELS` | `isnet-general-use,u2net` | Modelos usados no ensemble (separados por vírgula) |
+| `ENSEMBLE_VOTING_THRESHOLD` | `0.5` | Limiar de votação para o ensemble |
+
+### Preparação (`preparar_quadrado_manual.py`)
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `PREP_SKIP_BY_EXISTENCE` | `0` | Pula preparação se o arquivo de saída já existe |
+| `PREP_SKIP_IF_UPTODATE` | `0` | Pula preparação se o arquivo de saída é mais recente que a entrada |
+
+### Renomeação (`renomear_final.py` / `renomear_intermediarios.py`)
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `RENOMEAR_FINAL_CANONICAL_ONLY` | `0` | Processa apenas arquivos com stem canônico (modo incremental) |
+| `KEEP_CANONICAL_INTERMEDIATES` | `0` | Preserva intermediários já renomeados canonicamente (modo incremental) |
+
+### Barcode (`barcode_etiqueta.py`)
+
+| Variável | Padrão | Descrição |
+|----------|--------|-----------|
+| `BARCODE_FAST_PREP` | `0` | Usa pré-processamento simplificado para leitura de barcode |
+
+---
+
 ## ⚠️ Problemas Conhecidos
 
 ### Imagens com status `SEMCOD` (sem código)

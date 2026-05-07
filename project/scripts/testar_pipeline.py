@@ -6,10 +6,12 @@ NÃO precisa rodar o pipeline completo para detectar problemas.
 
 Uso:
     python scripts/testar_pipeline.py              # todos os testes
+    python scripts/testar_pipeline.py --ambiente   # só verificações de ambiente
     python scripts/testar_pipeline.py --etiquetas  # só leitura de etiquetas
     python scripts/testar_pipeline.py --paints     # só leitura de paints
     python scripts/testar_pipeline.py --logica     # só lógica interna (sem I/O)
     python scripts/testar_pipeline.py --csv        # só integridade do CSV
+    python scripts/testar_pipeline.py --deteccao   # roda YOLO nas 2 primeiras imagens (~30s)
     python scripts/testar_pipeline.py --verbose    # mostra detalhes de cada item
 """
 
@@ -57,6 +59,141 @@ def _assert(cond: bool, msg_ok: str, msg_fail: str) -> bool:
 def _add_warn(msg: str):
     _warn(msg)
     R["warned"] += 1
+
+
+# ══════════════════════════════════════════════
+# BLOCO 0 — Verificações de ambiente (~1s)
+# ══════════════════════════════════════════════
+def testar_ambiente():
+    print(f"\n{BOLD}[0/4] Verificações de ambiente{RESET}")
+
+    # Modelo YOLO
+    model_path = Path("models/best.pt")
+    _assert(
+        model_path.exists(),
+        f"Modelo YOLO encontrado: {model_path}",
+        f"Modelo YOLO NÃO encontrado: {model_path} — necessário para detecção"
+    )
+
+    # Tesseract
+    try:
+        import pytesseract
+        version = pytesseract.get_tesseract_version()
+        _ok(f"Tesseract acessível: versão {version}")
+        R["passed"] += 1
+    except Exception as e:
+        _fail(f"Tesseract não acessível: {e}")
+        R["failed"] += 1
+
+    # pyzbar
+    try:
+        import pyzbar  # noqa: F401
+        _ok("pyzbar importável")
+        R["passed"] += 1
+    except ImportError:
+        _warn("pyzbar não instalado — leitura de barcode usará apenas OpenCV (menor taxa)")
+        R["warned"] += 1
+
+    # Pasta de entrada
+    input_dir = Path("input_raw/fotos_originais")
+    _assert(
+        input_dir.exists(),
+        f"Pasta de entrada existe: {input_dir}",
+        f"Pasta de entrada NÃO existe: {input_dir}"
+    )
+
+    # Contagem de imagens
+    if input_dir.exists():
+        imgs = sorted([
+            *input_dir.glob("*.jpg"),
+            *input_dir.glob("*.jpeg"),
+            *input_dir.glob("*.png"),
+        ])
+        if imgs:
+            _ok(f"Imagens na pasta de entrada: {len(imgs)}")
+            R["passed"] += 1
+        else:
+            _warn(f"Nenhuma imagem encontrada em {input_dir}")
+            R["warned"] += 1
+
+
+# ══════════════════════════════════════════════
+# BLOCO EXTRA — Detecção YOLO (~30s)
+# ══════════════════════════════════════════════
+def testar_deteccao(verbose: bool = False):
+    print(f"\n{BOLD}[extra] Detecção YOLO nas primeiras 2 imagens (~30s){RESET}")
+
+    input_dir = Path("input_raw/fotos_originais")
+    model_path = Path("models/best.pt")
+
+    if not input_dir.exists():
+        _add_warn(f"Pasta {input_dir} não existe — pulando teste de detecção")
+        return
+
+    if not model_path.exists():
+        _add_warn(f"Modelo {model_path} não encontrado — pulando teste de detecção")
+        return
+
+    imgs = sorted([
+        *input_dir.glob("*.jpg"),
+        *input_dir.glob("*.jpeg"),
+        *input_dir.glob("*.png"),
+    ])[:2]
+
+    if not imgs:
+        _add_warn(f"Nenhuma imagem em {input_dir} — pulando teste de detecção")
+        return
+
+    try:
+        from ultralytics import YOLO
+    except ImportError:
+        _fail("ultralytics não instalado — não é possível testar detecção")
+        R["failed"] += 1
+        return
+
+    _info(f"Carregando modelo {model_path}...")
+    t0 = time.perf_counter()
+    try:
+        model = YOLO(str(model_path))
+    except Exception as e:
+        _fail(f"Erro ao carregar modelo: {e}")
+        R["failed"] += 1
+        return
+
+    total_deteccoes = 0
+    classes_encontradas: set[str] = set()
+
+    for img_path in imgs:
+        _info(f"Rodando YOLO em {img_path.name}...")
+        try:
+            results = model(str(img_path), verbose=False)
+            for r in results:
+                n = len(r.boxes) if r.boxes is not None else 0
+                total_deteccoes += n
+                if r.boxes is not None and r.names:
+                    for cls_id in r.boxes.cls.tolist():
+                        classes_encontradas.add(r.names[int(cls_id)])
+                if verbose:
+                    _info(f"  {img_path.name}: {n} detecção(ões) — {list(classes_encontradas)}")
+        except Exception as e:
+            _fail(f"Erro ao rodar YOLO em {img_path.name}: {e}")
+            R["failed"] += 1
+            return
+
+    dt = time.perf_counter() - t0
+    clases_alvo = {"etiqueta", "paint"}
+    encontrou_alvo = bool(classes_encontradas & clases_alvo)
+
+    _assert(
+        total_deteccoes > 0,
+        f"YOLO detectou {total_deteccoes} objeto(s) em {len(imgs)} imagem(ns) ({dt:.1f}s)",
+        f"YOLO não detectou nada em {len(imgs)} imagem(ns) — verifique o modelo e as imagens"
+    )
+    _assert(
+        encontrou_alvo,
+        f"Classes alvo detectadas: {classes_encontradas & clases_alvo}",
+        f"Nenhuma classe alvo (etiqueta/paint) detectada — classes encontradas: {classes_encontradas or 'nenhuma'}"
+    )
 
 
 # ══════════════════════════════════════════════
@@ -335,20 +472,24 @@ def main():
         epilog="""
 Exemplos:
   python scripts/testar_pipeline.py                  # tudo
+  python scripts/testar_pipeline.py --ambiente       # só ambiente (~1s)
   python scripts/testar_pipeline.py --logica         # só lógica (~1s)
   python scripts/testar_pipeline.py --csv            # só CSV (~1s)
+  python scripts/testar_pipeline.py --deteccao       # YOLO nas 2 primeiras imagens (~30s)
   python scripts/testar_pipeline.py --paints --verbose
   python scripts/testar_pipeline.py --etiquetas --verbose
         """
     )
+    parser.add_argument("--ambiente",  action="store_true")
     parser.add_argument("--logica",    action="store_true")
     parser.add_argument("--paints",    action="store_true")
     parser.add_argument("--etiquetas", action="store_true")
     parser.add_argument("--csv",       action="store_true")
+    parser.add_argument("--deteccao",  action="store_true", help="Roda YOLO nas 2 primeiras imagens (~30s)")
     parser.add_argument("--verbose",   action="store_true")
     args = parser.parse_args()
 
-    rodar_tudo = not any([args.logica, args.paints, args.etiquetas, args.csv])
+    rodar_tudo = not any([args.ambiente, args.logica, args.paints, args.etiquetas, args.csv, args.deteccao])
 
     print(f"\n{BOLD}{CYAN}══════════════════════════════════════════{RESET}")
     print(f"{BOLD}{CYAN}  joias-automation — Testes Rápidos{RESET}")
@@ -356,10 +497,13 @@ Exemplos:
 
     t0 = time.perf_counter()
 
+    # Ambiente sempre roda primeiro (quando tudo ou --ambiente explícito)
+    if rodar_tudo or args.ambiente:  testar_ambiente()
     if rodar_tudo or args.logica:    testar_logica()
     if rodar_tudo or args.paints:    testar_paints(verbose=args.verbose)
     if rodar_tudo or args.etiquetas: testar_etiquetas(verbose=args.verbose)
     if rodar_tudo or args.csv:       testar_csv(verbose=args.verbose)
+    if args.deteccao:                testar_deteccao(verbose=args.verbose)
 
     dt = time.perf_counter() - t0
     cor = GREEN if R["failed"] == 0 else RED

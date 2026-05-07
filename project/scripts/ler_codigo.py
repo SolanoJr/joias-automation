@@ -1,3 +1,29 @@
+"""
+ler_codigo.py — Leitura de código de produto a partir de crops de imagem.
+
+Estratégia de leitura em 4 estágios (do mais rápido/confiável ao mais lento):
+
+  Estágio 1 — Simples (rápido, ~5s budget):
+    • Barcode simples na etiqueta (pyzbar + OpenCV BarcodeDetector)
+    • OCR no paint (texto pintado na joia)
+    Retorna imediatamente se encontrar código válido.
+
+  Estágio 2 — Intensivo (só se estágio 1 deu sinal parcial, ~12s budget):
+    • Barcode intensivo na etiqueta (mais variantes de pré-processamento)
+    • OCR intensivo no paint (mais escalas e configurações PSM)
+    Ativado apenas quando há evidência de código parcial (≥6 dígitos detectados).
+
+  Estágio 3 — OCR de texto na etiqueta (~15s budget):
+    • OCR completo com múltiplas orientações e escalas
+    Ativado apenas com sinal útil (evita desperdício em imagens sem etiqueta).
+
+  Estágio 4 — Fallback:
+    • OCR na imagem original completa (regiões prováveis)
+    • Nome do arquivo como código (se já for numérico de 10 dígitos)
+
+Cada estágio tem deadline próprio + deadline global por item (CODE_READ_TIMEOUT_ITEM_S).
+O cache OCR (SHA256) evita reprocessar o mesmo arquivo em reruns.
+"""
 import re
 import os
 import time
@@ -805,7 +831,9 @@ def ler_codigo_unico(
     paints = _listar_paints(base)
     candidatos_etiqueta: list[str] = []
 
-    # estágio 1: simples (barato e confiável)
+    # ── ESTÁGIO 1: Simples ──────────────────────────────────────────────────
+    # Barcode e OCR de paint são rápidos e têm alta precisão quando funcionam.
+    # Tentamos primeiro para evitar gastar tempo nos estágios mais lentos.
     stage_simple_deadline = _stage_deadline(item_deadline, CODE_READ_TIMEOUT_SIMPLE_S)
     codigo_eti_s, fonte_eti_s, info_sinal = _tentar_barcode_etiqueta_fallback(
         base,
@@ -817,8 +845,11 @@ def ler_codigo_unico(
         deadline=stage_simple_deadline,
     )
     if _is_valid_candidate(codigo_eti_s):
+        # Barcode simples funcionou — retorno imediato, sem gastar mais tempo
         return codigo_eti_s, fonte_eti_s or "etiqueta_raw"
 
+    # OCR no paint: texto pintado diretamente na joia (ex: "1200090006")
+    # Mais rápido que OCR de etiqueta porque o crop já é pequeno e focado
     t_paint = time.perf_counter()
     timeout_simple = False
     for idx_paint, paint in enumerate(paints, start=1):
@@ -846,11 +877,15 @@ def ler_codigo_unico(
         early_stop="False",
     )
 
+    # Verifica se o estágio 1 deixou algum sinal parcial (≥6 dígitos detectados).
+    # Sem sinal, não vale a pena gastar tempo nos estágios intensivos.
     has_partial_6plus = bool(info_sinal.get("partial_6plus", False))
     has_short_candidate = bool(info_sinal.get("short_promissor", False))
     sinal_util = _has_useful_signal(etiquetas, paints, has_partial_6plus, has_short_candidate)
 
-    # estágio 2: intensivo (somente com sinal útil)
+    # ── ESTÁGIO 2: Intensivo ─────────────────────────────────────────────────
+    # Só entra aqui se há evidência de código parcial — evita desperdício em
+    # imagens sem etiqueta/paint onde o estágio 1 já confirmou que não há nada.
     if sinal_util and not _deadline_exceeded(item_deadline):
         stage_int_deadline = _stage_deadline(item_deadline, CODE_READ_TIMEOUT_INTENSIVO_S)
         codigo_eti_i, fonte_eti_i, info_sinal_i = _tentar_barcode_etiqueta_fallback(
@@ -916,7 +951,10 @@ def ler_codigo_unico(
             early_stop="False",
         )
 
-    # estágio 3: OCR (somente com sinal útil)
+    # ── ESTÁGIO 3: OCR de texto na etiqueta ─────────────────────────────────
+    # Mais lento que barcode, mas funciona quando o código de barras está
+    # danificado ou ilegível. Usa múltiplas orientações porque etiquetas
+    # podem estar rotacionadas na foto.
     sinal_util = _has_useful_signal(etiquetas, paints, has_partial_6plus, has_short_candidate)
     if sinal_util and not _deadline_exceeded(item_deadline):
         stage_ocr_deadline = _stage_deadline(item_deadline, CODE_READ_TIMEOUT_OCR_S)
@@ -973,6 +1011,10 @@ def ler_codigo_unico(
     if _deadline_exceeded(item_deadline):
         _append_profile(perfil_rows, base, "timeout_item", CODE_READ_TIMEOUT_ITEM_S, "", "timeout_item", early_stop="False")
 
+    # ── ESTÁGIO 4: Fallbacks finais ──────────────────────────────────────────
+    # OCR na imagem original completa: último recurso quando não há crop de
+    # etiqueta/paint, ou quando todos os estágios anteriores falharam.
+    # Foca nas regiões inferiores da imagem onde o código costuma aparecer.
     if ENABLE_OCR_IMAGEM_COMPLETA:
         original = _buscar_original(base)
         if original and not _deadline_exceeded(item_deadline):
@@ -1001,7 +1043,8 @@ def ler_codigo_unico(
                 early_stop="False",
             )
 
-    # 4) Fallback: nome já é número
+    # Fallback final: se o nome do arquivo já é um código numérico de 10 dígitos,
+    # usa diretamente — acontece quando a foto já foi renomeada anteriormente.
     if base.isdigit() and len(base) == CODIGO_LEN_ALVO:
         return base, "nome"
 
