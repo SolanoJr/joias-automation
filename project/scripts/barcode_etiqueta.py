@@ -5,6 +5,7 @@ import sys
 import contextlib
 from collections import Counter
 from typing import Any
+import numpy as np
 
 if os.name == "nt" and hasattr(os, "add_dll_directory"):
     pyzbar_dir = Path(sys.prefix) / "Lib" / "site-packages" / "pyzbar"
@@ -26,6 +27,8 @@ ESCALAS_BARCODE_INTENSIVO = [2.5, 3.0]
 MIN_CODIGO_LEN = 8
 MAX_CODIGO_LEN = 16
 BARCODE_FAST_PREP = os.getenv("BARCODE_FAST_PREP", "0").strip().lower() in {"1", "true", "yes", "on"}
+# Tamanho máximo para pyzbar (imagens muito grandes travam o decoder)
+PYZBAR_MAX_SIDE = 1500
 
 @contextlib.contextmanager
 def silenciar_stderr():
@@ -64,7 +67,24 @@ def _extrair_digitos(valor: Any) -> str:
 
 
 def _codigo_valido(valor: Any, min_digits: int = MIN_CODIGO_LEN) -> str | None:
-    codigo = _extrair_digitos(valor)
+    """
+    Valida e retorna o código lido pelo barcode reader.
+    Preserva o código alfanumérico completo (ex: BR1204039) quando válido.
+    """
+    texto = str(valor).strip().upper()
+    if not texto:
+        return None
+
+    # Código alfanumérico tipo BR1204039, CR3984506 — preserva completo
+    import re as _re
+    alnum_match = _re.fullmatch(r"[A-Z]{1,3}[0-9]{4,9}", texto)
+    if alnum_match:
+        n_digits = sum(ch.isdigit() for ch in texto)
+        if n_digits >= min_digits:
+            return texto
+
+    # Código numérico puro — extrai só dígitos
+    codigo = _extrair_digitos(texto)
     if MIN_CODIGO_LEN <= len(codigo) <= MAX_CODIGO_LEN and len(codigo) >= min_digits:
         return codigo
     return None
@@ -182,12 +202,29 @@ def _variantes_rapidas(img_bgr, gray):
     yield adapt
 
 
+def _limitar_tamanho_pyzbar(img: np.ndarray, max_side: int = None) -> np.ndarray:
+    """Limita tamanho da imagem para evitar travamento do pyzbar em imagens grandes."""
+    if max_side is None:
+        max_side = PYZBAR_MAX_SIDE
+    h, w = img.shape[:2]
+    maior = max(h, w)
+    if maior <= max_side:
+        return img
+    scale = max_side / float(maior)
+    novo_w = max(1, int(w * scale))
+    novo_h = max(1, int(h * scale))
+    return cv2.resize(img, (novo_w, novo_h), interpolation=cv2.INTER_AREA)
+
+
 def _primeiro_codigo_pyzbar(img_array, min_digits: int = 10):
     if pyzbar_decode is None:
         return None
 
+    # Limita tamanho para evitar travamento
+    img_safe = _limitar_tamanho_pyzbar(img_array)
+
     with silenciar_stderr():
-        resultados = pyzbar_decode(img_array)
+        resultados = pyzbar_decode(img_safe)
 
     for r in resultados:
         codigo = _codigo_valido(r.data.decode("utf-8", errors="ignore"), min_digits=min_digits)
@@ -197,12 +234,81 @@ def _primeiro_codigo_pyzbar(img_array, min_digits: int = 10):
     return None
 
 
+def _pyzbar_variantes(img_gray: np.ndarray, min_digits: int = 10):
+    """
+    Tenta ler barcode com pyzbar usando múltiplas variantes de pré-processamento.
+    Estratégia otimizada para CODE128 em etiquetas de joias.
+    Retorna (codigo, variante_usada) ou (None, "").
+    """
+    if pyzbar_decode is None:
+        return None, ""
+
+    h, w = img_gray.shape[:2]
+
+    # Variantes em ordem de custo crescente
+    def _tentar(arr, nome):
+        safe = _limitar_tamanho_pyzbar(arr)
+        with silenciar_stderr():
+            resultados = pyzbar_decode(safe)
+        for r in resultados:
+            codigo = _codigo_valido(r.data.decode("utf-8", errors="ignore"), min_digits=min_digits)
+            if codigo:
+                return codigo, nome
+        return None, ""
+
+    # 1. Original com padding (mais comum que funciona)
+    pad = cv2.copyMakeBorder(img_gray, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+    c, n = _tentar(pad, "pad_orig")
+    if c: return c, n
+
+    # 2. Otsu com padding
+    _, otsu = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    pad_otsu = cv2.copyMakeBorder(otsu, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+    c, n = _tentar(pad_otsu, "pad_otsu")
+    if c: return c, n
+
+    # 3. Scale 2x com padding (para imagens pequenas)
+    if max(h, w) < 800:
+        up2 = cv2.resize(img_gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        pad_up2 = cv2.copyMakeBorder(up2, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+        c, n = _tentar(pad_up2, "pad_2x")
+        if c: return c, n
+
+        _, otsu_up2 = cv2.threshold(up2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        pad_otsu_up2 = cv2.copyMakeBorder(otsu_up2, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+        c, n = _tentar(pad_otsu_up2, "pad_otsu_2x")
+        if c: return c, n
+
+    # 4. CLAHE com padding
+    clahe_img = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(img_gray)
+    pad_clahe = cv2.copyMakeBorder(clahe_img, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+    c, n = _tentar(pad_clahe, "pad_clahe")
+    if c: return c, n
+
+    # 5. Sem padding (fallback)
+    c, n = _tentar(img_gray, "raw")
+    if c: return c, n
+
+    c, n = _tentar(otsu, "otsu")
+    if c: return c, n
+
+    return None, ""
+
+
 def ler_barcode_crop_simples(caminho_img: Path, min_digits: int = 10, return_stage: bool = False):
     img = cv2.imread(str(caminho_img))
     if img is None:
         return (None, "") if return_stage else None
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # Usa a estratégia otimizada com pyzbar (variantes + padding)
+    if pyzbar_decode is not None:
+        codigo, variante = _pyzbar_variantes(gray, min_digits=min_digits)
+        if codigo:
+            return (codigo, variante) if return_stage else codigo
+
+    # Fallback: pyzbar simples nas variantes básicas (compatibilidade)
     up2 = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
     _, thr = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
 

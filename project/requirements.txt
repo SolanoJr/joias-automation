@@ -24,6 +24,7 @@ numpy==2.2.6
 onnxruntime==1.21.0
 opencv-python==4.13.0.92
 opencv-python-headless==4.13.0.92
+pyzbar==0.1.9
 packaging==26.1
 pillow==12.2.0
 platformdirs==4.9.6

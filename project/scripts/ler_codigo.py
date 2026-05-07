@@ -716,7 +716,7 @@ def _tentar_barcode_etiqueta_fallback(
             codigo, meta = _normalizar_resultado_barcode(
                 ler_barcode_imagem(
                     etiqueta,
-                    min_digits=CODIGO_LEN_ALVO,
+                    min_digits=7,  # Aceita BR1204039 (9 chars, 7 dígitos) e similares
                     return_meta=True,
                     simple_only=True,
                 )
@@ -760,7 +760,7 @@ def _tentar_barcode_etiqueta_fallback(
                 )
 
             codigo, meta = _normalizar_resultado_barcode(
-                ler_barcode_imagem(etiqueta, modo="intensivo", min_digits=CODIGO_LEN_ALVO, return_meta=True)
+                ler_barcode_imagem(etiqueta, modo="intensivo", min_digits=7, return_meta=True)
             )
             _capturar_sinal(codigo, meta)
             codigo_norm = _normalizar_codigo(codigo)
