@@ -183,6 +183,7 @@ def _listar_etiquetas(base: str) -> list[Path]:
         ETI_DIR,
         [
             f"{base}_etiqueta_*.jpg",
+            f"{base}_e.jpg",           # renomeado por renomear_intermediarios (etapa 5)
             f"{base}_semcod_e*.jpg",   # resquício de run anterior (etapa 5 renomeia)
             f"{base} - *_e*.jpg",
         ],
@@ -197,6 +198,7 @@ def _listar_paints(base: str) -> list[Path]:
         PAINTS_DIR,
         [
             f"{base}_paint_*.jpg",
+            f"{base}_p.jpg",           # renomeado por renomear_intermediarios (etapa 5)
             f"{base}_semcod_p*.jpg",   # resquício de run anterior (etapa 5 renomeia)
             f"{base} - *_p*.jpg",
         ],

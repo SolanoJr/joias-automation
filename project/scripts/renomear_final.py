@@ -234,15 +234,19 @@ def stem_base(nome_arquivo: str) -> str:
     """
     Normaliza nomes para bater "foto base".
     Remove:
+      - _sr  (sufixo adicionado por renomear_intermediarios.py na etapa 5)
       - _etiqueta_0, _etiqueta_1, etc (e qualquer sufixo depois)
       - _warp
       - _sem_etiqueta
+      - _semcod  (prefixo de sem-código)
     Ex:
+      BR1165006_sr.jpg -> BR1165006
       20260107_132828_etiqueta_0_warp.jpg -> 20260107_132828
       1200910006_etiqueta_1.jpg -> 1200910006
       1200910006_sem_etiqueta.jpg -> 1200910006
     """
     s = Path(nome_arquivo).stem
+    s = re.sub(r"_sr$", "", s)           # sufixo de segmentado rembg (etapa 5)
     s = re.sub(r"_etiqueta_\d+.*$", "", s)
     s = re.sub(r"_warp$", "", s)
     s = re.sub(r"_sem_etiqueta$", "", s)
