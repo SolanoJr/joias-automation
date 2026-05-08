@@ -39,6 +39,148 @@ REMBG_SEGUNDA_PASSAGEM           = os.getenv("REMBG_SEGUNDA_PASSAGEM", "1").stri
 REMBG_SEGUNDA_PASSAGEM_THRESHOLD = float(os.getenv("REMBG_SEGUNDA_PASSAGEM_THRESHOLD", "0.15"))
 REMBG_WORKERS                    = int(os.getenv("REMBG_WORKERS", "2"))
 
+# ===== POS-PROCESSAMENTO: ZOOM + CENTRALIZAÇÃO + LIMPEZA DE PAPEL =====
+# Detecta a joia real (pixels < JOIA_THRESH), recorta, centraliza e aplica zoom.
+# Limpa papel residual (tons cinza que o rembg deixou) de forma conservadora.
+# Desabilite com POS_PROC_ZOOM=0 se quiser manter o comportamento anterior.
+POS_PROC_ZOOM    = os.getenv("POS_PROC_ZOOM", "1").strip().lower() in {"1", "true", "yes", "on"}
+POS_PROC_SIZE    = 1024
+POS_PROC_MAX_SCALE = 0.88   # joia ocupa no maximo 88% do canvas
+POS_PROC_MARGIN  = 30       # margem minima ao redor da joia (px)
+POS_PROC_JOIA_T  = 100      # threshold para detectar joia real (metal/pedra < 100)
+
+
+def _pos_proc_limpar_papel(img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Limpeza conservadora de papel residual.
+    Sempre limpa >= 220. Tenta 190/180 so se nao apagar joia (<100)
+    e houver papel suficiente nessa faixa (>3% dos pixels).
+    """
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    resultado = img_bgr.copy()
+    total = gray.size
+    mask_joia = gray < POS_PROC_JOIA_T
+
+    # Sempre seguro
+    resultado[gray >= 220] = [255, 255, 255]
+
+    # Tenta mais agressivo se seguro e com volume suficiente
+    for t in [190, 180]:
+        mask_limpar = (gray >= t) & (gray < 220)
+        if (mask_joia & mask_limpar).sum() > 0:
+            break  # apagaria joia — para
+        if mask_limpar.sum() / total < 0.03:
+            break  # pouco papel — nao vale
+        resultado[gray >= t] = [255, 255, 255]
+
+    return resultado
+
+
+def _pos_proc_zoom_centralizar(img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Detecta a joia real (thresh < 100), recorta com margem,
+    aplica zoom adaptativo e centraliza no canvas branco.
+    Retorna a imagem processada (mesmo tamanho: 1024x1024).
+    """
+    from PIL import Image as PILImage
+
+    SIZE    = POS_PROC_SIZE
+    max_px  = int(SIZE * POS_PROC_MAX_SCALE)
+
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    mask = (gray < POS_PROC_JOIA_T).astype(np.uint8)
+
+    # Remove ruido pontual
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    mask_limpa = np.zeros_like(mask)
+    for i in range(1, num_labels):
+        if stats[i, cv2.CC_STAT_AREA] > 50:
+            mask_limpa[labels == i] = 1
+
+    ys, xs = np.where(mask_limpa > 0)
+    if not len(ys):
+        # Fallback: threshold mais alto
+        mask2 = (gray < 150).astype(np.uint8)
+        ys, xs = np.where(mask2 > 0)
+        if not len(ys):
+            return img_bgr  # nao detectou joia — retorna original
+
+    x1, y1 = int(xs.min()), int(ys.min())
+    x2, y2 = int(xs.max()), int(ys.max())
+    h, w = img_bgr.shape[:2]
+
+    joia_w_real = x2 - x1
+    joia_h_real = y2 - y1
+
+    # Margem proporcional
+    cx_pre = (x1 + x2) / 2
+    cy_pre = (y1 + y2) / 2
+    offset_pre = ((cx_pre - SIZE/2)**2 + (cy_pre - SIZE/2)**2) ** 0.5
+    margem_base = max(POS_PROC_MARGIN, int(max(joia_w_real, joia_h_real) * 0.10))
+    margem_extra = int(offset_pre * 0.08) if (offset_pre > 150 and joia_w_real < 300) else 0
+    margem = margem_base + margem_extra
+
+    x1 = max(0, x1 - margem)
+    y1 = max(0, y1 - margem)
+    x2 = min(w, x2 + margem)
+    y2 = min(h, y2 + margem)
+
+    joia_w = x2 - x1
+    joia_h = y2 - y1
+    maior_dim = max(joia_w, joia_h)
+    ocup_atual = maior_dim / SIZE
+
+    cx_joia = (x1 + x2) / 2
+    cy_joia = (y1 + y2) / 2
+    offset = ((cx_joia - SIZE/2)**2 + (cy_joia - SIZE/2)**2) ** 0.5
+
+    # Joia centrada e tamanho razoavel: nao amplia
+    ja_ok = (ocup_atual >= 0.30 and offset < 80)
+
+    if ja_ok:
+        target_px = maior_dim  # mantém tamanho
+    elif offset < 80:
+        target_px = int(SIZE * 0.65)   # centrada mas pequena
+    elif ocup_atual < 0.25:
+        target_px = int(SIZE * 0.75)   # pequena e deslocada
+    else:
+        target_px = int(SIZE * 0.85)   # media/grande e deslocada
+
+    # Crop
+    crop = img_bgr[y1:y2, x1:x2]
+    crop_pil = PILImage.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+    cw, ch = crop_pil.size
+
+    if not ja_ok and maior_dim < target_px:
+        zoom = min(target_px / maior_dim, max_px / maior_dim)
+        novo_w = min(int(cw * zoom), max_px)
+        novo_h = min(int(ch * zoom), max_px)
+        if cw > 0 and ch > 0:
+            if novo_w / cw < novo_h / ch:
+                novo_h = int(ch * novo_w / cw)
+            else:
+                novo_w = int(cw * novo_h / ch)
+        crop_pil = crop_pil.resize((max(1, novo_w), max(1, novo_h)), PILImage.Resampling.LANCZOS)
+    elif maior_dim > max_px:
+        scale = max_px / maior_dim
+        crop_pil = crop_pil.resize((max(1, int(cw * scale)), max(1, int(ch * scale))), PILImage.Resampling.LANCZOS)
+
+    # Centraliza no canvas branco
+    canvas = PILImage.new("RGB", (SIZE, SIZE), (255, 255, 255))
+    x = (SIZE - crop_pil.width) // 2
+    y = (SIZE - crop_pil.height) // 2
+    canvas.paste(crop_pil, (x, y))
+
+    return cv2.cvtColor(np.array(canvas), cv2.COLOR_RGB2BGR)
+
+
+def _aplicar_pos_processamento(img_bgr: np.ndarray) -> np.ndarray:
+    """Aplica limpeza de papel + zoom/centralização na imagem segmentada."""
+    if not POS_PROC_ZOOM:
+        return img_bgr
+    img_limpa = _pos_proc_limpar_papel(img_bgr)
+    return _pos_proc_zoom_centralizar(img_limpa)
+
 
 # ─────────────────────────────────────────────
 # Cache SHA256 para segunda passagem
@@ -457,14 +599,36 @@ def _processar_imagem(img: Path, cache: dict) -> dict:
         if REMBG_SEGUNDA_PASSAGEM:
             try:
                 from PIL import Image
-                img_pil  = Image.open(img).convert("RGB")
+
+                # 1. Pós-processamento: zoom + centralização + limpeza de papel
+                img_bgr = cv2.imread(str(img))
+                if img_bgr is not None and POS_PROC_ZOOM:
+                    img_bgr = _aplicar_pos_processamento(img_bgr)
+                    img_pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+                else:
+                    img_pil = Image.open(img).convert("RGB")
+
+                # 2. Segunda passagem rembg (remove papel residual restante)
                 fhash    = _file_hash(img)
                 resultado, white_antes, white_depois, rembg2_ok = _aplicar_segunda_passagem_rembg(img_pil, cache, fhash)
                 resultado.save(dest, quality=95)
             except Exception:
                 shutil.copy2(img, dest)
         else:
-            shutil.copy2(img, dest)
+            if POS_PROC_ZOOM:
+                try:
+                    from PIL import Image
+                    img_bgr = cv2.imread(str(img))
+                    if img_bgr is not None:
+                        img_bgr = _aplicar_pos_processamento(img_bgr)
+                        img_pil = Image.fromarray(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+                        img_pil.save(dest, quality=95)
+                    else:
+                        shutil.copy2(img, dest)
+                except Exception:
+                    shutil.copy2(img, dest)
+            else:
+                shutil.copy2(img, dest)
 
         status = "RENOMEADO" if base != codigo_saida else "JA_CORRETO"
     else:
