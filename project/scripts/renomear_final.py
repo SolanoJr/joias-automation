@@ -39,147 +39,150 @@ REMBG_SEGUNDA_PASSAGEM           = os.getenv("REMBG_SEGUNDA_PASSAGEM", "1").stri
 REMBG_SEGUNDA_PASSAGEM_THRESHOLD = float(os.getenv("REMBG_SEGUNDA_PASSAGEM_THRESHOLD", "0.15"))
 REMBG_WORKERS                    = int(os.getenv("REMBG_WORKERS", "2"))
 
-# ===== POS-PROCESSAMENTO: ZOOM + CENTRALIZAÇÃO + LIMPEZA DE PAPEL =====
-# Detecta a joia real (pixels < JOIA_THRESH), recorta, centraliza e aplica zoom.
-# Limpa papel residual (tons cinza que o rembg deixou) de forma conservadora.
-# Desabilite com POS_PROC_ZOOM=0 se quiser manter o comportamento anterior.
-POS_PROC_ZOOM    = os.getenv("POS_PROC_ZOOM", "1").strip().lower() in {"1", "true", "yes", "on"}
-POS_PROC_SIZE    = 1024
-POS_PROC_MAX_SCALE = 0.88   # joia ocupa no maximo 88% do canvas
-POS_PROC_MARGIN  = 30       # margem minima ao redor da joia (px)
-POS_PROC_JOIA_T  = 100      # threshold para detectar joia real (metal/pedra < 100)
+# ===== POS-PROCESSAMENTO: ZOOM + CENTRALIZAÇÃO =====
+# Detecta a joia (thresh<100), amplia para ficar bem visivel,
+# centraliza no canvas e substitui branco puro pelo tom do papel.
+# Desabilite com POS_PROC_ZOOM=0.
+POS_PROC_ZOOM      = os.getenv("POS_PROC_ZOOM", "1").strip().lower() in {"1", "true", "yes", "on"}
+POS_PROC_SIZE      = 1024
+POS_PROC_MAX_SCALE = 0.92   # joia ocupa no maximo 92% do canvas
+POS_PROC_MARGIN    = 40     # margem ao redor da joia (px)
+POS_PROC_TARGET    = 0.88   # joia deve ocupar ~88% do canvas apos zoom
 
 
-def _pos_proc_limpar_papel(img_bgr: np.ndarray) -> np.ndarray:
+def _tom_papel(img_bgr: np.ndarray) -> int:
     """
-    Limpeza conservadora de papel residual.
-    Sempre limpa >= 220. Tenta 190/180 so se nao apagar joia (<100)
-    e houver papel suficiente nessa faixa (>3% dos pixels).
+    Retorna o tom do papel da imagem (pixels 120-210).
+    Se nao houver papel suficiente (fundo ja branco), retorna 255.
     """
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    resultado = img_bgr.copy()
-    total = gray.size
-    mask_joia = gray < POS_PROC_JOIA_T
-
-    # Sempre seguro
-    resultado[gray >= 220] = [255, 255, 255]
-
-    # Tenta mais agressivo se seguro e com volume suficiente
-    for t in [190, 180]:
-        mask_limpar = (gray >= t) & (gray < 220)
-        if (mask_joia & mask_limpar).sum() > 0:
-            break  # apagaria joia — para
-        if mask_limpar.sum() / total < 0.03:
-            break  # pouco papel — nao vale
-        resultado[gray >= t] = [255, 255, 255]
-
-    return resultado
+    mask = (gray >= 120) & (gray < 210)
+    if mask.sum() / gray.size < 0.08:
+        return 255
+    return int(np.bincount(gray[mask].astype(np.int32), minlength=256).argmax())
 
 
-def _pos_proc_zoom_centralizar(img_bgr: np.ndarray) -> np.ndarray:
-    """
-    Detecta a joia real (thresh < 100), recorta com margem,
-    aplica zoom adaptativo e centraliza no canvas branco.
-    Retorna a imagem processada (mesmo tamanho: 1024x1024).
-    """
-    from PIL import Image as PILImage
-
-    SIZE    = POS_PROC_SIZE
-    max_px  = int(SIZE * POS_PROC_MAX_SCALE)
-
-    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    mask = (gray < POS_PROC_JOIA_T).astype(np.uint8)
-
-    # Remove ruido pontual
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    mask_limpa = np.zeros_like(mask)
-    for i in range(1, num_labels):
-        if stats[i, cv2.CC_STAT_AREA] > 50:
-            mask_limpa[labels == i] = 1
-
-    ys, xs = np.where(mask_limpa > 0)
-    if not len(ys):
-        # Fallback: threshold mais alto
-        mask2 = (gray < 150).astype(np.uint8)
-        ys, xs = np.where(mask2 > 0)
-        if not len(ys):
-            return img_bgr  # nao detectou joia — retorna original
-
-    x1, y1 = int(xs.min()), int(ys.min())
-    x2, y2 = int(xs.max()), int(ys.max())
-    h, w = img_bgr.shape[:2]
-
-    joia_w_real = x2 - x1
-    joia_h_real = y2 - y1
-
-    # Margem proporcional
-    cx_pre = (x1 + x2) / 2
-    cy_pre = (y1 + y2) / 2
-    offset_pre = ((cx_pre - SIZE/2)**2 + (cy_pre - SIZE/2)**2) ** 0.5
-    margem_base = max(POS_PROC_MARGIN, int(max(joia_w_real, joia_h_real) * 0.10))
-    margem_extra = int(offset_pre * 0.08) if (offset_pre > 150 and joia_w_real < 300) else 0
-    margem = margem_base + margem_extra
-
-    x1 = max(0, x1 - margem)
-    y1 = max(0, y1 - margem)
-    x2 = min(w, x2 + margem)
-    y2 = min(h, y2 + margem)
-
-    joia_w = x2 - x1
-    joia_h = y2 - y1
-    maior_dim = max(joia_w, joia_h)
-    ocup_atual = maior_dim / SIZE
-
-    cx_joia = (x1 + x2) / 2
-    cy_joia = (y1 + y2) / 2
-    offset = ((cx_joia - SIZE/2)**2 + (cy_joia - SIZE/2)**2) ** 0.5
-
-    # Joia centrada e tamanho razoavel: nao amplia
-    ja_ok = (ocup_atual >= 0.30 and offset < 80)
-
-    if ja_ok:
-        target_px = maior_dim  # mantém tamanho
-    elif offset < 80:
-        target_px = int(SIZE * 0.65)   # centrada mas pequena
-    elif ocup_atual < 0.25:
-        target_px = int(SIZE * 0.75)   # pequena e deslocada
-    else:
-        target_px = int(SIZE * 0.85)   # media/grande e deslocada
-
-    # Crop
-    crop = img_bgr[y1:y2, x1:x2]
-    crop_pil = PILImage.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-    cw, ch = crop_pil.size
-
-    if not ja_ok and maior_dim < target_px:
-        zoom = min(target_px / maior_dim, max_px / maior_dim)
-        novo_w = min(int(cw * zoom), max_px)
-        novo_h = min(int(ch * zoom), max_px)
-        if cw > 0 and ch > 0:
-            if novo_w / cw < novo_h / ch:
-                novo_h = int(ch * novo_w / cw)
-            else:
-                novo_w = int(cw * novo_h / ch)
-        crop_pil = crop_pil.resize((max(1, novo_w), max(1, novo_h)), PILImage.Resampling.LANCZOS)
-    elif maior_dim > max_px:
-        scale = max_px / maior_dim
-        crop_pil = crop_pil.resize((max(1, int(cw * scale)), max(1, int(ch * scale))), PILImage.Resampling.LANCZOS)
-
-    # Centraliza no canvas branco
-    canvas = PILImage.new("RGB", (SIZE, SIZE), (255, 255, 255))
-    x = (SIZE - crop_pil.width) // 2
-    y = (SIZE - crop_pil.height) // 2
-    canvas.paste(crop_pil, (x, y))
-
-    return cv2.cvtColor(np.array(canvas), cv2.COLOR_RGB2BGR)
+def _bbox_joia(gray: np.ndarray):
+    """Bbox da joia com thresh<100. Fallback thresh<150."""
+    for thresh in [100, 150]:
+        mask = (gray < thresh).astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        m = np.zeros_like(mask)
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] > 200:
+                m[labels == i] = 1
+        ys, xs = np.where(m > 0)
+        if len(ys):
+            return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+    return None
 
 
 def _aplicar_pos_processamento(img_bgr: np.ndarray) -> np.ndarray:
-    """Aplica limpeza de papel + zoom/centralização na imagem segmentada."""
+    """
+    1. Detecta bbox da joia (thresh<100)
+    2. Calcula zoom para joia ocupar ~75% do canvas
+    3. Amplia a imagem inteira (nao so o crop) — mantem o papel ao redor
+    4. Recorta 1024x1024 centrado na joia
+    5. Substitui branco puro (>=240) pelo tom do papel da imagem
+    """
+    from PIL import Image as PILImage
+
     if not POS_PROC_ZOOM:
         return img_bgr
-    img_limpa = _pos_proc_limpar_papel(img_bgr)
-    return _pos_proc_zoom_centralizar(img_limpa)
+
+    SIZE   = POS_PROC_SIZE
+    max_px = int(SIZE * POS_PROC_MAX_SCALE)
+    h, w   = img_bgr.shape[:2]
+    gray   = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    # Tom do papel (para substituir branco puro no final)
+    tom = _tom_papel(img_bgr)
+
+    # Bbox da joia
+    det = _bbox_joia(gray)
+    if det is None:
+        # Sem joia detectada: so substitui branco pelo papel
+        resultado = img_bgr.copy()
+        resultado[gray >= 240] = [tom, tom, tom]
+        return resultado
+
+    x1, y1, x2, y2 = det
+    joia_w = x2 - x1
+    joia_h = y2 - y1
+    maior_dim = max(joia_w, joia_h)
+
+    # Se o bbox e muito pequeno (< 12% do canvas), provavelmente deteccao errada
+    # Retorna original com branco substituido pelo papel
+    if maior_dim < SIZE * 0.12:
+        resultado = img_bgr.copy()
+        resultado[gray >= 240] = [tom, tom, tom]
+        return resultado
+
+    # Se joia esta deslocada (>20%) E pequena (<35%): zoom vai cortar — retorna original
+    cx_orig = (x1 + x2) / 2
+    cy_orig = (y1 + y2) / 2
+    offset = ((cx_orig - SIZE/2)**2 + (cy_orig - SIZE/2)**2) ** 0.5
+    if offset > SIZE * 0.20 and maior_dim < SIZE * 0.35:
+        resultado = img_bgr.copy()
+        resultado[gray >= 240] = [tom, tom, tom]
+        return resultado
+
+    # Protege imagens ja boas: joia centrada (offset<10%) e tamanho razoavel (>=35%)
+    # Nao aplica zoom — so substitui branco pelo papel e retorna
+    if offset < SIZE * 0.10 and maior_dim >= SIZE * 0.35:
+        resultado = img_bgr.copy()
+        resultado[gray >= 240] = [tom, tom, tom]
+        return resultado
+
+    # Zoom: quanto ampliar para a joia ocupar TARGET do canvas
+    target_px = int(SIZE * POS_PROC_TARGET)
+    if maior_dim >= target_px:
+        zoom = 1.0
+    else:
+        zoom = min(target_px / maior_dim, int(SIZE * POS_PROC_MAX_SCALE) / maior_dim)
+
+    # Amplia a imagem inteira com o zoom calculado
+    if zoom != 1.0:
+        new_w = max(1, int(w * zoom))
+        new_h = max(1, int(h * zoom))
+        img_zoom = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
+        # Atualiza coordenadas da joia na imagem ampliada
+        cx_zoom = int((x1 + x2) / 2 * zoom)
+        cy_zoom = int((y1 + y2) / 2 * zoom)
+    else:
+        img_zoom = img_bgr
+        new_w, new_h = w, h
+        cx_zoom = int((x1 + x2) / 2)
+        cy_zoom = int((y1 + y2) / 2)
+
+    # Recorta 1024x1024 centrado na joia
+    half = SIZE // 2
+    left = cx_zoom - half
+    top  = cy_zoom - half
+
+    # Cria canvas com tom do papel e cola a imagem ampliada
+    canvas = np.full((SIZE, SIZE, 3), tom, dtype=np.uint8)
+
+    # Regiao da imagem ampliada que cabe no canvas
+    src_x1 = max(0, left)
+    src_y1 = max(0, top)
+    src_x2 = min(new_w, left + SIZE)
+    src_y2 = min(new_h, top  + SIZE)
+
+    # Regiao correspondente no canvas
+    dst_x1 = src_x1 - left
+    dst_y1 = src_y1 - top
+    dst_x2 = dst_x1 + (src_x2 - src_x1)
+    dst_y2 = dst_y1 + (src_y2 - src_y1)
+
+    if src_x2 > src_x1 and src_y2 > src_y1:
+        canvas[dst_y1:dst_y2, dst_x1:dst_x2] = img_zoom[src_y1:src_y2, src_x1:src_x2]
+
+    # Substitui branco puro (>=240) pelo tom do papel
+    gray_c = cv2.cvtColor(canvas, cv2.COLOR_BGR2GRAY)
+    canvas[gray_c >= 240] = [tom, tom, tom]
+
+    return canvas
 
 
 # ─────────────────────────────────────────────

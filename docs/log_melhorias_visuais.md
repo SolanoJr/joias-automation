@@ -196,3 +196,85 @@ Usuário aceita deixar os casos difíceis (BR1166006, BR1167006, PL2401606) para
 Em vez de remover o papel cinza, **preencher o resto da imagem com mais papel** (escala cinzenta).
 Raciocínio: se o fundo já tem papel cinza residual, uniformizar esse cinza em toda a imagem
 pode ser mais seguro que tentar remover — e visualmente mais consistente.
+
+
+---
+
+## Rodada 5 — limpeza conservadora (protege <150) + fundo cinza
+
+**BR1166006** — nunca mais voltou ao estado perfeito da rodada 1. Melhor deixar com papel completo (sem limpeza). Não tentar mais.
+**BR1174026** — continua perfeita.
+**BR1175026** — continua perfeita.
+**BR1181006** — precisa diminuir agressividade + preencher fundo com cinza/papel.
+**BR1197006** — nada muda ela. Só preencher com cinza/papel. Não testar mais.
+**BR1205007** — diminuir agressão + preencher completamente com cinza/papel (não só uma tirinha).
+**PL2401606** — desistir de limpar. Só preencher espaço em branco com cinza/papel.
+**PL2441606** — horrível: agressão + não centralizada. Coração deve ficar no meio + preencher resto com cinza/papel.
+
+### Decisão final sobre estratégia
+- **Limpeza**: só >= 220 (sem tentar 190/180). Não arriscar mais.
+- **Fundo cinza**: aplicar em TODAS as imagens com papel residual (>8% em 150-220).
+  O cinza deve preencher TODO o fundo, não só partes.
+- **Centralização**: garantir que a joia detectada fique no centro antes de preencher.
+- **BR1166006, BR1197006, PL2401606**: desistir de limpar, só preencher com cinza.
+
+
+---
+
+## Rodada 6 — detecção dois estágios + fundo cinza
+
+**BR1166006** — DESISTIR. Cada tentativa piora. Deixar com papel original, sem pós-processamento.
+**BR1174026** — continua perfeita.
+**BR1175026** — continua perfeita.
+**BR1181006** — ainda precisa diminuir agressividade + centralizar (ir mais pra baixo-direita).
+**BR1197006** — DESISTIR de melhorar. Só cortar quadrada, centralizar joia e preencher com cinza/papel. Manual.
+**BR1205007** — diminuir agressão + centralizar como estava antes.
+**PL2401606** — DESISTIR. Só preencher espaço branco com cinza/papel. Sem limpeza.
+**PL2441606** — ao redor ficou branco bom. Se deixar esse branco pro resto da imagem, joia centralizada com zoom, talvez fique perfeito.
+
+### Decisão final consolidada
+- **BR1166006, BR1197006, PL2401606**: sem pós-processamento de limpeza. Só fundo cinza/papel se sobrar papel.
+- **PL2441606**: manter o branco ao redor, centralizar joia, zoom leve.
+- **Limpeza**: APENAS >= 220. Nada mais agressivo.
+- **Fundo cinza**: aplicar em todas com papel residual, preenchendo TODO o fundo uniformemente.
+- **Pergunta do usuário**: "essas imagens q ainda sobrou muito papel, ainda vai ser cortada pra ficar quadrada e COMPLETAMENTE com cinza/papel, né?" — SIM, esse é o objetivo.
+
+
+---
+
+## Rodada 7 — fundo cinza artificial (errado)
+
+**BR1166006** — só precisa de zoom, o papel já está lá, não precisa de cinza artificial
+**BR1174026** — perfeito (joia ficou um pouco menor mas aceitável)
+**BR1175026** — perfeito
+**BR1181006** — cortou joia em cima, nada centralizado, cinza desnecessário. Quer: papel original + joia centralizada com zoom
+**BR1197006** — mesma coisa: deixar o papel, dar zoom na joia, centralizar
+**BR1205007** — ficou muito bom, faltou só zoom (joia ficou pequena)
+**PL2401606** — dar zoom e deixar com o papel mesmo
+**PL2441606** — deixar só a joia e o papel, coração no centro igual ao objetivo
+
+### Decisão final — abordagem correta
+NÃO recortar e colar em canvas novo.
+NÃO usar cinza artificial.
+Abordagem: ampliar a região da joia (zoom) mantendo o papel ao redor,
+centralizar a joia no canvas 1024x1024, substituir só o branco puro (>=240)
+pelo tom do papel da própria imagem.
+
+
+---
+
+## Rodada 8 — zoom na imagem inteira + recorte centrado (abordagem correta)
+
+**BR1166006** — no caminho certo. Mais zoom + mais centralização.
+**BR1174026** — não mencionada = mantida como está (perfeita).
+**BR1175026** — não mencionada = mantida como está (perfeita).
+**BR1181006** — continua cortando joia e descentralizada. Quase desistindo, deixar quadrada.
+**BR1197006** — no caminho certo. Mais zoom + mais centralização.
+**BR1205007** — tamanho ideal, ficou boa.
+**PL2401606** — mais zoom. Pode cortar um pouco a pontinha da pulseira.
+**PL2441606** — sem salvação. Deixar a foto original mesmo.
+
+### Ações
+- Aumentar POS_PROC_TARGET de 0.75 para 0.88 (mais zoom)
+- BR1181006: investigar por que corta e descentraliza
+- PL2441606: excluir do pós-processamento (usar original)
