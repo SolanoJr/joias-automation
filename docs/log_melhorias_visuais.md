@@ -278,3 +278,44 @@ pelo tom do papel da própria imagem.
 - Aumentar POS_PROC_TARGET de 0.75 para 0.88 (mais zoom)
 - BR1181006: investigar por que corta e descentraliza
 - PL2441606: excluir do pós-processamento (usar original)
+
+
+---
+
+## Rodada 9 — análise pós-processamento nas 55 imagens
+
+### Mais zoom + centralização necessários
+BR1165006, BR1166006, BR1171012, BR1172026, BR1173012, BR1177006, BR1178000,
+BR1181006, BR1187006, BR1188006, BR1189006, BR1197006, BR1198006, BR1209084,
+CJ0244526, PL2401606, PL2441606, PL2452006, PL2462006
+→ Identificar dourado para zoom/centralização melhor
+
+### Zoom excessivo — diminuir
+BR1167006, BR1176006, BR1185006, BR1183026, BR1184026, BR1207007
+
+### Branco forte residual (pintar com tom do papel)
+BR1168026, BR1169012 — ainda tem branco forte, mais zoom e centralização pra baixo
+
+### Pioraram — voltar com mais zoom e centralização
+BR1174026, BR1179006
+
+### Cortando joia — diminuir zoom levemente
+BR1182006, BR1183026, BR1184026
+
+### Muito mais zoom e centralização
+BR1186006, BR1208039
+
+### Só centralização (identificar dourado)
+BR1202006, BR1202014, BR1203008, BR1204039, BR1206039
+
+### Quase perfeito — mais zoom e centralização
+CR3784206, CR3794206, CR3964506, CR5044539, CR5034539, CR5024510,
+CR4064506, CR5054532, CR3974506
+
+### Decisão: criar tabela de configuração por imagem
+Usuário sugeriu criar tabela/Excel com ajustes individuais por imagem:
+- zoom_target (porcentagem da joia no canvas)
+- offset_x, offset_y (centralização)
+- pode_cortar_pontas (bool)
+- foco (joia inteira / pingente / etc)
+- modo (zoom / sem_zoom / original)

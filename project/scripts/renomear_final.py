@@ -62,8 +62,29 @@ def _tom_papel(img_bgr: np.ndarray) -> int:
     return int(np.bincount(gray[mask].astype(np.int32), minlength=256).argmax())
 
 
-def _bbox_joia(gray: np.ndarray):
-    """Bbox da joia com thresh<100. Fallback thresh<150."""
+def _bbox_joia(gray: np.ndarray, img_bgr: np.ndarray = None):
+    """
+    Detecta o bbox da joia.
+    Se img_bgr fornecido, usa dourado (hue 15-35) como detector primario.
+    Fallback: thresh<100, depois thresh<150.
+    """
+    # Detector primario: dourado (joias douradas)
+    if img_bgr is not None:
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        mask_d = (
+            (hsv[:,:,0] >= 15) & (hsv[:,:,0] <= 35) &
+            (hsv[:,:,1] >= 60) & (hsv[:,:,2] >= 60)
+        ).astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask_d, connectivity=8)
+        m = np.zeros_like(mask_d)
+        for i in range(1, n):
+            if stats[i, cv2.CC_STAT_AREA] > 500:
+                m[labels == i] = 1
+        ys, xs = np.where(m > 0)
+        if len(ys):
+            return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+    # Fallback: thresh<100 e thresh<150
     for thresh in [100, 150]:
         mask = (gray < thresh).astype(np.uint8)
         n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
@@ -98,8 +119,8 @@ def _aplicar_pos_processamento(img_bgr: np.ndarray) -> np.ndarray:
     # Tom do papel (para substituir branco puro no final)
     tom = _tom_papel(img_bgr)
 
-    # Bbox da joia
-    det = _bbox_joia(gray)
+    # Bbox da joia (usa dourado como detector primario)
+    det = _bbox_joia(gray, img_bgr)
     if det is None:
         # Sem joia detectada: so substitui branco pelo papel
         resultado = img_bgr.copy()
@@ -112,64 +133,75 @@ def _aplicar_pos_processamento(img_bgr: np.ndarray) -> np.ndarray:
     maior_dim = max(joia_w, joia_h)
 
     # Se o bbox e muito pequeno (< 12% do canvas), provavelmente deteccao errada
-    # Retorna original com branco substituido pelo papel
     if maior_dim < SIZE * 0.12:
         resultado = img_bgr.copy()
         resultado[gray >= 240] = [tom, tom, tom]
         return resultado
 
-    # Se joia esta deslocada (>20%) E pequena (<35%): zoom vai cortar — retorna original
     cx_orig = (x1 + x2) / 2
     cy_orig = (y1 + y2) / 2
-    offset = ((cx_orig - SIZE/2)**2 + (cy_orig - SIZE/2)**2) ** 0.5
+    offset  = ((cx_orig - SIZE/2)**2 + (cy_orig - SIZE/2)**2) ** 0.5
+
+    # ── PADRAO APRENDIDO ──────────────────────────────────────────────
+    # Imagens com muito papel (>30%): so substitui branco pelo tom do papel.
+    # O papel ao redor e intencional — nao aplicar zoom nem recorte.
+    # Imagens sem papel (<5%): centraliza com zoom ate TARGET.
+    # ─────────────────────────────────────────────────────────────────
+    tem_muito_papel = (gray >= 120).sum() / gray.size - (gray >= 210).sum() / gray.size > 0.30
+
+    if tem_muito_papel:
+        resultado = img_bgr.copy()
+        resultado[gray >= 240] = [tom, tom, tom]
+        return resultado
+
+    # Se joia esta deslocada (>20%) E pequena (<35%): retorna original
     if offset > SIZE * 0.20 and maior_dim < SIZE * 0.35:
         resultado = img_bgr.copy()
         resultado[gray >= 240] = [tom, tom, tom]
         return resultado
 
-    # Protege imagens ja boas: joia centrada (offset<10%) e tamanho razoavel (>=35%)
-    # Nao aplica zoom — so substitui branco pelo papel e retorna
+    # Protege imagens ja boas: centrada (<10%) e razoavel (>=35%)
     if offset < SIZE * 0.10 and maior_dim >= SIZE * 0.35:
         resultado = img_bgr.copy()
         resultado[gray >= 240] = [tom, tom, tom]
         return resultado
 
-    # Zoom: quanto ampliar para a joia ocupar TARGET do canvas
-    target_px = int(SIZE * POS_PROC_TARGET)
+    # Sem papel: centraliza com zoom ate TARGET
+    target_ocup = POS_PROC_TARGET
+    target_cx   = SIZE // 2
+    target_cy   = SIZE // 2
+
+    target_px = int(SIZE * target_ocup)
     if maior_dim >= target_px:
         zoom = 1.0
     else:
         zoom = min(target_px / maior_dim, int(SIZE * POS_PROC_MAX_SCALE) / maior_dim)
 
-    # Amplia a imagem inteira com o zoom calculado
+    # Amplia a imagem inteira
     if zoom != 1.0:
         new_w = max(1, int(w * zoom))
         new_h = max(1, int(h * zoom))
         img_zoom = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
-        # Atualiza coordenadas da joia na imagem ampliada
-        cx_zoom = int((x1 + x2) / 2 * zoom)
-        cy_zoom = int((y1 + y2) / 2 * zoom)
+        cx_zoom  = int(cx_orig * zoom)
+        cy_zoom  = int(cy_orig * zoom)
     else:
         img_zoom = img_bgr
         new_w, new_h = w, h
-        cx_zoom = int((x1 + x2) / 2)
-        cy_zoom = int((y1 + y2) / 2)
+        cx_zoom = int(cx_orig)
+        cy_zoom = int(cy_orig)
 
-    # Recorta 1024x1024 centrado na joia
-    half = SIZE // 2
-    left = cx_zoom - half
-    top  = cy_zoom - half
+    # Recorta 1024x1024 posicionando a joia em (target_cx, target_cy)
+    left = cx_zoom - target_cx
+    top  = cy_zoom - target_cy
 
-    # Cria canvas com tom do papel e cola a imagem ampliada
+    # Cria canvas com tom do papel
     canvas = np.full((SIZE, SIZE, 3), tom, dtype=np.uint8)
 
-    # Regiao da imagem ampliada que cabe no canvas
     src_x1 = max(0, left)
     src_y1 = max(0, top)
     src_x2 = min(new_w, left + SIZE)
     src_y2 = min(new_h, top  + SIZE)
 
-    # Regiao correspondente no canvas
     dst_x1 = src_x1 - left
     dst_y1 = src_y1 - top
     dst_x2 = dst_x1 + (src_x2 - src_x1)
