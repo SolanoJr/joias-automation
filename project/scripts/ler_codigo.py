@@ -435,10 +435,8 @@ def _ocr_paint(paint_path: Path, deadline: float | None = None) -> str | None:
     candidatos.extend([v for v in variantes_adap if v is not None])
 
     chamadas = 0
-    for base in candidatos:
-        if _deadline_exceeded(deadline):
-            return None
-        for escala in (1.0, 1.8, 2.2, 2.8):
+    for escala in (1.0, 1.8, 2.2, 2.8):
+        for base in candidatos:
             if _deadline_exceeded(deadline):
                 return None
             if escala == 1.0:
@@ -492,29 +490,29 @@ def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str
         "--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     ]
 
-    chamadas = 0
+    # Pre-calcula variantes com Otsu para evitar repetição no loop de escala
+    candidatos_finais = []
     for base in variantes:
-        if _deadline_exceeded(deadline):
-            return None
         _, otsu = cv2.threshold(base, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        for cand in (base, otsu, 255 - otsu):
+        candidatos_finais.extend([base, otsu, 255 - otsu])
+
+    chamadas = 0
+    for escala in (2.0, 2.8, 3.2):
+        for cand in candidatos_finais:
             if _deadline_exceeded(deadline):
                 return None
-            for escala in (2.0, 2.8, 3.2):
+            up = cv2.resize(cand, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
+            for cfg in psm_configs:
                 if _deadline_exceeded(deadline):
                     return None
-                up = cv2.resize(cand, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
-                for cfg in psm_configs:
-                    if _deadline_exceeded(deadline):
-                        return None
-                    codigo = _ocr_digits(up, cfg)
-                    chamadas += 1
-                    if codigo:
-                        _ocr_result_to_cache(cache_key, codigo)
-                        return codigo
+                codigo = _ocr_digits(up, cfg)
+                chamadas += 1
+                if codigo:
+                    _ocr_result_to_cache(cache_key, codigo)
+                    return codigo
 
-                    if chamadas >= MAX_OCR_CALLS_PAINT_INTENSIVO:
-                        return None
+                if chamadas >= MAX_OCR_CALLS_PAINT_INTENSIVO:
+                    return None
 
     return None
 
@@ -546,13 +544,11 @@ def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> st
         "--psm 11 -c tessedit_char_whitelist=0123456789",
     ]
 
-    chamadas = 0
+    # Pre-calcula todas as variantes para todas as regiões
+    candidatos_finais = []
     for reg in regioes:
-        if _deadline_exceeded(deadline):
-            return None
         if reg.size == 0:
             continue
-
         blur = cv2.GaussianBlur(reg, (3, 3), 0)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(blur)
         _, otsu = cv2.threshold(clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -564,25 +560,25 @@ def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> st
             31,
             7,
         )
+        candidatos_finais.extend([clahe, otsu, 255 - otsu, adapt, 255 - adapt])
 
-        for base in (clahe, otsu, 255 - otsu, adapt, 255 - adapt):
+    chamadas = 0
+    for escala in (1.5, 2.2, 3.0):
+        for base in candidatos_finais:
             if _deadline_exceeded(deadline):
                 return None
-            for escala in (1.5, 2.2, 3.0):
+            up = cv2.resize(base, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
+            for cfg in psm_configs:
                 if _deadline_exceeded(deadline):
                     return None
-                up = cv2.resize(base, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
-                for cfg in psm_configs:
-                    if _deadline_exceeded(deadline):
-                        return None
-                    codigo = _ocr_digits(up, cfg)
-                    chamadas += 1
-                    if codigo:
-                        _ocr_result_to_cache(cache_key, codigo)
-                        return codigo
+                codigo = _ocr_digits(up, cfg)
+                chamadas += 1
+                if codigo:
+                    _ocr_result_to_cache(cache_key, codigo)
+                    return codigo
 
-                    if chamadas >= MAX_OCR_CALLS_IMAGEM_COMPLETA:
-                        return None
+                if chamadas >= MAX_OCR_CALLS_IMAGEM_COMPLETA:
+                    return None
 
     return None
 
@@ -641,13 +637,11 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: f
         usar_rotacao_ccw = True
         limite_chamadas = MAX_OCR_CALLS_ETIQUETA
 
-    chamadas = 0
+    # Pre-calcula todas as bases (região + variante + orientação)
+    bases_finais = []
     for reg in regioes:
-        if _deadline_exceeded(deadline):
-            return None
         if reg.size == 0:
             continue
-
         blur = cv2.GaussianBlur(reg, (3, 3), 0)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(blur)
         _, otsu = cv2.threshold(clahe, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -659,34 +653,35 @@ def _ocr_etiqueta(caminho_img: Path, nivel_confianca: str = "baixa", deadline: f
             31,
             7,
         )
+        for variant in (clahe, otsu, 255 - otsu, adapt, 255 - adapt):
+            candidatos_orientacao = [variant, cv2.rotate(variant, cv2.ROTATE_90_CLOCKWISE)]
+            if usar_rotacao_ccw:
+                candidatos_orientacao.append(cv2.rotate(variant, cv2.ROTATE_90_COUNTERCLOCKWISE))
+            if usar_rotacao_180:
+                candidatos_orientacao.append(cv2.rotate(variant, cv2.ROTATE_180))
+            bases_finais.extend(candidatos_orientacao)
 
-        for base in (clahe, otsu, 255 - otsu, adapt, 255 - adapt):
+    chamadas = 0
+    for escala in escalas:
+        for up_base in bases_finais:
             if _deadline_exceeded(deadline):
                 return None
-            candidatos_orientacao = [base, cv2.rotate(base, cv2.ROTATE_90_CLOCKWISE)]
-            if usar_rotacao_ccw:
-                candidatos_orientacao.append(cv2.rotate(base, cv2.ROTATE_90_COUNTERCLOCKWISE))
-            if usar_rotacao_180:
-                candidatos_orientacao.append(cv2.rotate(base, cv2.ROTATE_180))
+            if escala == 1.0:
+                up = up_base
+            else:
+                up = cv2.resize(up_base, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
 
-            for orientado in candidatos_orientacao:
+            for cfg in psm_configs:
                 if _deadline_exceeded(deadline):
                     return None
-                for escala in escalas:
-                    if _deadline_exceeded(deadline):
-                        return None
-                    up = cv2.resize(orientado, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)
-                    for cfg in psm_configs:
-                        if _deadline_exceeded(deadline):
-                            return None
-                        codigo = _ocr_digits(up, cfg)
-                        chamadas += 1
-                        if codigo:
-                            _ocr_result_to_cache(cache_key, codigo)
-                            return codigo
+                codigo = _ocr_digits(up, cfg)
+                chamadas += 1
+                if codigo:
+                    _ocr_result_to_cache(cache_key, codigo)
+                    return codigo
 
-                        if chamadas >= limite_chamadas:
-                            return None
+                if chamadas >= limite_chamadas:
+                    return None
 
     return None
 
