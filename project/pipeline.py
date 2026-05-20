@@ -189,8 +189,17 @@ def main(
     mode: str = "auto",
     inprocess_threshold: int = INPROCESS_THRESHOLD_PADRAO,
     incremental: bool = False,
+    use_cache: bool = True,
+    clear_cache: bool = False,
 ):
     t_inicio = time.perf_counter()
+
+    if clear_cache:
+        cache_dir = Path("output/cache_ocr")
+        if cache_dir.exists():
+            log.info("Limpando cache de OCR...")
+            for f in cache_dir.glob("*.ocr"):
+                f.unlink()
 
     if LIMPAR_SAIDAS and not incremental:
         log.info("Limpando saídas anteriores...")
@@ -198,14 +207,22 @@ def main(
     elif incremental:
         log.info("Modo incremental: preservando saídas e usando cache por arquivo.")
 
-    detect_env = {}
-    seg_env = {}
+    base_env = {}
+    if use_cache:
+        base_env["OCR_CACHE_ENABLED"] = "1"
+        log.info("OCR Cache: ATIVADO")
+    else:
+        base_env["OCR_CACHE_ENABLED"] = "0"
+        log.info("OCR Cache: DESATIVADO")
+
+    detect_env = base_env.copy()
     if not modo_full and limite_teste > 0:
         detect_env["PROCESS_LIMIT"] = str(limite_teste)
         log.info(f"Modo teste rápido: limitando entrada para {limite_teste} arquivo(s)")
     else:
         log.info("Modo completo: processando todos os arquivos")
 
+    seg_env = base_env.copy()
     if incremental:
         detect_env["DETECT_SKIP_IF_UPTODATE"] = "1"
         detect_env["DETECT_SKIP_BY_EXISTENCE"] = "1"
@@ -234,7 +251,7 @@ def main(
     runner(
         "scripts/2_preparar_quadrado_manual.py" if use_inprocess else [sys.executable, "scripts/2_preparar_quadrado_manual.py"],
         "Preparando pasta quadrada manual...",
-        env_extra=seg_env if incremental else None,
+        env_extra=seg_env,
         step_idx=2,
         step_total=5,
     )
@@ -248,14 +265,14 @@ def main(
     runner(
         "scripts/4_renomear_final.py" if use_inprocess else [sys.executable, "scripts/4_renomear_final.py"],
         "Renomeando e gerando CSV...",
-        env_extra=seg_env if incremental else None,
+        env_extra=seg_env,
         step_idx=4,
         step_total=5,
     )
     runner(
         "scripts/5_renomear_intermediarios.py" if use_inprocess else [sys.executable, "scripts/5_renomear_intermediarios.py"],
         "Renomeando pastas intermediárias por código...",
-        env_extra=seg_env if incremental else None,
+        env_extra=seg_env,
         step_idx=5,
         step_total=5,
     )
@@ -284,6 +301,8 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["auto", "subprocess", "inprocess"], default="auto", help="Modo de execução do pipeline")
     parser.add_argument("--inprocess-threshold", type=int, default=INPROCESS_THRESHOLD_PADRAO, help=f"Threshold de itens para auto usar in-process (padrão: {INPROCESS_THRESHOLD_PADRAO})")
     parser.add_argument("--incremental", action="store_true", help="Preserva saídas e ativa cache de detecção/segmentação para reruns rápidos")
+    parser.add_argument("--no-cache", action="store_true", help="Desativa OCR cache (benchmark)")
+    parser.add_argument("--clear-cache", action="store_true", help="Limpa o cache de OCR antes de começar")
     parser.add_argument("--dry-run", action="store_true", help="Lista imagens que seriam processadas e estima tempo, sem processar nada")
     args = parser.parse_args()
 
@@ -296,4 +315,6 @@ if __name__ == "__main__":
             mode=args.mode,
             inprocess_threshold=args.inprocess_threshold,
             incremental=args.incremental,
+            use_cache=not args.no_cache,
+            clear_cache=args.clear_cache,
         )
