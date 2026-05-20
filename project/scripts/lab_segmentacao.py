@@ -11,8 +11,14 @@ from io import BytesIO
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [LAB] %(levelname)s - %(message)s")
 
 # ===== CONFIGURAÇÕES DO LABORATÓRIO =====
-INPUT_DIR = Path("project/input_raw/fotos_originais")
-OUTPUT_DIR = Path("project/output/lab_segmentacao")
+# Detecta se estamos na raiz ou dentro de /project
+if Path("project").exists() and Path("project/input_raw").exists():
+    BASE_DIR = Path("project")
+else:
+    BASE_DIR = Path(".")
+
+INPUT_DIR = BASE_DIR / "input_raw/fotos_originais"
+OUTPUT_DIR = BASE_DIR / "output/lab_segmentacao"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Parâmetros de Processamento
