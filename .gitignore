@@ -11,6 +11,7 @@ output/
 
 # Modelos treinados grandes
 *.pt
+!models/best.pt
 models/sam_vit_b.pth
 
 # Datasets e dados temporários
