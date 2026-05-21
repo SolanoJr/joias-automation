@@ -3,16 +3,19 @@ import re
 import os
 from pathlib import Path
 
-CSV_PATH = Path("output/resultados.csv")
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+CSV_PATH = PROJECT_ROOT / "output/resultados.csv"
 
 # No modo incremental, preserva arquivos intermediários já renomeados canonicamente
 KEEP_CANONICAL_INTERMEDIATES = os.getenv("KEEP_CANONICAL_INTERMEDIATES", "0").strip().lower() in {"1", "true", "yes", "on"}
 
-PAINTS_DIR = Path("output/2_paints")
-ETIQUETAS_DIR = Path("output/1_etiquetas")
-SEM_ETIQUETA_DIR = Path("output/3_sem_etiqueta")
-QUADRADO_DIR = Path("output/4_quadrado_manual")
-SEG_DIR = Path("output/5_segmentado_rembg")
+PAINTS_DIR = PROJECT_ROOT / "output/2_paints"
+ETIQUETAS_DIR = PROJECT_ROOT / "output/1_etiquetas"
+SEM_ETIQUETA_DIR = PROJECT_ROOT / "output/3_sem_etiqueta"
+QUADRADO_DIR = PROJECT_ROOT / "output/4_quadrado_manual"
+SEG_DIR = PROJECT_ROOT / "output/5_segmentado_rembg"
 
 
 def normalizar_para_nome(valor: str) -> str:

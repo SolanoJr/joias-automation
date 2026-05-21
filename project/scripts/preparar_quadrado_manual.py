@@ -3,9 +3,11 @@ import os
 
 from PIL import Image, ImageOps
 
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-INPUT_DIR = Path("output/3_sem_etiqueta")
-OUTPUT_DIR = Path("output/4_quadrado_manual")
+INPUT_DIR = PROJECT_ROOT / "output/3_sem_etiqueta"
+OUTPUT_DIR = PROJECT_ROOT / "output/4_quadrado_manual"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SIZE = 1200

@@ -19,9 +19,12 @@ except Exception:
     pyzbar_decode = None
     PYZBAR_DISPONIVEL = False
 
-PASTA_ETIQUETAS = Path("output/etiquetas")
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+PASTA_ETIQUETAS = PROJECT_ROOT / "output/etiquetas"
 DEBUG_SALVAR_FALHAS = False
-PASTA_DEBUG_FALHAS = Path("output/debug_barcode_falhas")
+PASTA_DEBUG_FALHAS = PROJECT_ROOT / "output/debug_barcode_falhas"
 ESCALAS_BARCODE = [1.5, 2.0]
 ESCALAS_BARCODE_INTENSIVO = [2.5, 3.0]
 MIN_CODIGO_LEN = 8

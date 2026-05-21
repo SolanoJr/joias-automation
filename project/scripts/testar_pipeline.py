@@ -68,7 +68,8 @@ def testar_ambiente():
     print(f"\n{BOLD}[0/4] Verificações de ambiente{RESET}")
 
     # Modelo YOLO
-    model_path = Path("models/best.pt")
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    model_path = _PROJECT_ROOT / "models/best.pt"
     _assert(
         model_path.exists(),
         f"Modelo YOLO encontrado: {model_path}",
@@ -95,7 +96,7 @@ def testar_ambiente():
         R["warned"] += 1
 
     # Pasta de entrada
-    input_dir = Path("input_raw/fotos_originais")
+    input_dir = _PROJECT_ROOT / "input_raw/fotos_originais"
     _assert(
         input_dir.exists(),
         f"Pasta de entrada existe: {input_dir}",
@@ -123,8 +124,9 @@ def testar_ambiente():
 def testar_deteccao(verbose: bool = False):
     print(f"\n{BOLD}[extra] Detecção YOLO nas primeiras 2 imagens (~30s){RESET}")
 
-    input_dir = Path("input_raw/fotos_originais")
-    model_path = Path("models/best.pt")
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    input_dir = _PROJECT_ROOT / "input_raw/fotos_originais"
+    model_path = _PROJECT_ROOT / "models/best.pt"
 
     if not input_dir.exists():
         _add_warn(f"Pasta {input_dir} não existe — pulando teste de detecção")
@@ -267,7 +269,8 @@ def testar_logica():
 def testar_paints(verbose: bool = False):
     print(f"\n{BOLD}[2/4] Leitura de paints (output/2_paints/){RESET}")
 
-    paints_dir = Path("output/2_paints")
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    paints_dir = _PROJECT_ROOT / "output/2_paints"
     if not paints_dir.exists() or not list(paints_dir.glob("*.jpg")):
         _add_warn("output/2_paints/ vazia — rode o pipeline primeiro (etapa 1)")
         return
@@ -321,7 +324,8 @@ def testar_paints(verbose: bool = False):
 def testar_etiquetas(verbose: bool = False):
     print(f"\n{BOLD}[3/4] Leitura de etiquetas (output/1_etiquetas/){RESET}")
 
-    eti_dir = Path("output/1_etiquetas")
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    eti_dir = _PROJECT_ROOT / "output/1_etiquetas"
     if not eti_dir.exists() or not list(eti_dir.glob("*.jpg")):
         _add_warn("output/1_etiquetas/ vazia — rode o pipeline primeiro (etapa 1)")
         return
@@ -393,7 +397,8 @@ def testar_etiquetas(verbose: bool = False):
 def testar_csv(verbose: bool = False):
     print(f"\n{BOLD}[4/4] Integridade do CSV e saídas{RESET}")
 
-    csv_path = Path("output/resultados.csv")
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    csv_path = _PROJECT_ROOT / "output/resultados.csv"
     if not csv_path.exists():
         _add_warn("output/resultados.csv não encontrado — rode o pipeline primeiro")
         return
@@ -440,8 +445,8 @@ def testar_csv(verbose: bool = False):
     # Diagnóstico dos SEMCOD
     if semcod:
         _info(f"{len(semcod)} imagens sem código — classificando causas...")
-        eti_dir = Path("output/1_etiquetas")
-        pnt_dir = Path("output/2_paints")
+        eti_dir = _PROJECT_ROOT / "output/1_etiquetas"
+        pnt_dir = _PROJECT_ROOT / "output/2_paints"
 
         tem_eti, tem_pnt, sem_nada = [], [], []
         for r in semcod:

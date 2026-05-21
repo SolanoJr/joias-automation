@@ -4,16 +4,19 @@ import pytesseract
 import re
 import os
 
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # ===== CONFIG =====
-INPUT_DIR = Path("input_raw/fotos_originais")
-OUT_ETI = Path("output/1_etiquetas")
-OUT_PNT = Path("output/2_paints")
-OUT_SEM = Path("output/3_sem_etiqueta")
+INPUT_DIR = PROJECT_ROOT / "input_raw/fotos_originais"
+OUT_ETI = PROJECT_ROOT / "output/1_etiquetas"
+OUT_PNT = PROJECT_ROOT / "output/2_paints"
+OUT_SEM = PROJECT_ROOT / "output/3_sem_etiqueta"
 USE_LISTA_REPROCESSAR = False
-LISTA_REPROCESSAR = Path("output/analysis/lista_reprocessar_sem_etiqueta.txt")
+LISTA_REPROCESSAR = PROJECT_ROOT / "output/analysis/lista_reprocessar_sem_etiqueta.txt"
 
 # coloque o caminho do seu best.pt treinado
-MODEL_PATH = Path("models/best.pt")
+MODEL_PATH = PROJECT_ROOT / "models/best.pt"
 
 # thresholds
 CONF_MIN = float(os.getenv("YOLO_CONF_MIN", "0.25"))

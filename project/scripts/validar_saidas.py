@@ -7,7 +7,10 @@ import cv2
 import pytesseract
 
 
-ROOT = Path(".")
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+ROOT = PROJECT_ROOT
 OUT = ROOT / "output"
 PAINTS = OUT / "2_paints"
 ETIQUETAS = OUT / "1_etiquetas"

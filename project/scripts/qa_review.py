@@ -33,10 +33,13 @@ from pathlib import Path
 from dataclasses import dataclass, field
 
 
-FINAL_DIR  = Path("output/6_final")
-REVIEW_DIR = Path("output/review")
-JSON_PATH  = Path("output/review/relatorio_qa.json")
-HTML_PATH  = Path("output/review/relatorio_qa.html")
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+FINAL_DIR  = PROJECT_ROOT / "output/6_final"
+REVIEW_DIR = PROJECT_ROOT / "output/review"
+JSON_PATH  = PROJECT_ROOT / "output/review/relatorio_qa.json"
+HTML_PATH  = PROJECT_ROOT / "output/review/relatorio_qa.html"
 
 # Thresholds
 TH_PAPEL_MAX      = 0.40   # > 40% de papel (120-220) = suspeito

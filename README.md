@@ -27,18 +27,10 @@ python pipeline.py --full     # processar todas as imagens
 - `requirements.txt` - dependências Python
 
 ### Pastas de Contexto (para estudo/entendimento)
-- **`scripts/`** - wrappers que apontam para `project/scripts/` (interface legada)
 - **`docs/`** - documentação técnica e arquitetura
 - **`datasets/`** - dados de treinamento usados
-- **`input_raw/`** - cópia original dos dados (veja também em `project/input_raw/`)
-- **`runs/`** - resultados históricos de treinamento YOLO
-- **`temp/`** - arquivos de backup, análises antigas, debug
-
-### Documentação
-- **`PLANO_REORGANIZACAO.md`** - como reorganizamos o projeto
-- **`PLANO_IMPLEMENTACAO_OCR_CACHE.md`** - implementação de cache de OCR
-- **`README_progress.md`** - histórico de progresso e versões
-- **`reorg_analysis.ipynb`** - notebook de análise
+- **`temp/`** - arquivos históricos, backups e **Laboratório de testes**
+- **`temp/Laboratorio/`** - sistema de testes de segmentação (ver abaixo)
 
 ## 🔄 Pipeline
 
@@ -53,18 +45,47 @@ O pipeline processa imagens em 6 etapas:
 
 Veja `project/scripts/` ou `docs/ordem_execucao.md` para detalhes.
 
+## 🎯 Módulos Independentes
+
+O pipeline agora suporta execução de módulos individuais:
+
+```bash
+python pipeline.py --apenas detectar    # só detecção YOLO (etapa 1)
+python pipeline.py --apenas preparar     # só preparação quadrada (etapa 2)
+python pipeline.py --apenas segmentar    # só segmentação rembg (etapa 3)
+python pipeline.py --apenas renomear     # só renomeação + CSV (etapas 4+5)
+python pipeline.py                       # pipeline completo (padrão)
+```
+
+## 🔬 Laboratório de Segmentação
+
+Sistema de testes em `temp/Laboratorio/` para melhorar a máscara de segmentação:
+
+```bash
+cd temp/Laboratorio
+python rodar_lab.py              # 5-10 imagens aleatórias
+python rodar_lab.py --seed 42    # reprodutível
+python rodar_lab.py --todas       # todas as imagens
+# Abra resultados/relatorio_lab.html para auditoria visual
+```
+
+Módulos do lab:
+- `lab_mascara.py` — heurísticas OpenCV para refinar máscara (brilho especular, silhueta por bordas)
+- `lab_amostragem.py` — seleção inteligente de 5-10 imagens
+- `lab_auditoria.py` — comparações visuais antes/depois para revisão humana
+- `lab_segmentacao.py` — pipeline completo de teste
+
 ## 📊 Compreender o Código
 
 - **Gargalos principais**: `scripts/ler_codigo.py` (OCR), `scripts/segment_rembg.py` (segmentação)
-- **Performance**: veja `PLANO_IMPLEMENTACAO_OCR_CACHE.md`
-- **Análises detalhadas**: pasta `temp/` contém histórico de análises
+- **Análises detalhadas**: pasta `temp/` contém histórico de análises e planos anteriores
 
 ## 🛠️ Desenvolvimento
 
 Para adicionar features ou otimizações:
 1. Edite em `project/scripts/`
 2. Teste: `python pipeline.py --limit 10`
-3. Scripts em `scripts/` (raiz) servem como forwarding para `project/scripts/`
+3. Use o Laboratório (`temp/Laboratorio/`) para testar melhorias de segmentação
 
 ## 📦 Dependências Principais
 
@@ -85,6 +106,6 @@ Veja `project/requirements.txt` para lista completa com versões fixadas.
 ## 📝 Notas
 
 - `project/` pode ser copiado como um projeto independente
-- Pastas ao redor servem como repositório do conhecimento/histórico
-- `temp/` contém backups e versões antigas (seguro remover)
-- `BUGS_CORRIGIDOS.md` — lista de bugs corrigidos na última sessão
+- Todos os scripts usam caminhos absolutos baseados em `PROJECT_ROOT` (funciona de qualquer diretório)
+- `temp/` contém históricos, planos antigos e o Laboratório de testes
+- Documentação histórica (BUGS, PLANOs, progresso) foi movida para `temp/`

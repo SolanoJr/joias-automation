@@ -8,24 +8,27 @@ import logging
 from pathlib import Path
 
 
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent
+
 LIMPAR_SAIDAS = True
 PASTAS_SAIDA = [
-    Path("output/1_etiquetas"),
-    Path("output/2_paints"),
-    Path("output/3_sem_etiqueta"),
-    Path("output/4_quadrado_manual"),
-    Path("output/5_segmentado_rembg"),
-    Path("output/6_final"),
+    PROJECT_ROOT / "output/1_etiquetas",
+    PROJECT_ROOT / "output/2_paints",
+    PROJECT_ROOT / "output/3_sem_etiqueta",
+    PROJECT_ROOT / "output/4_quadrado_manual",
+    PROJECT_ROOT / "output/5_segmentado_rembg",
+    PROJECT_ROOT / "output/6_final",
 ]
-CSV_SAIDA = Path("output/resultados.csv")
-BASELINE_VALIDACAO = Path("output/analysis/baseline_validacao.json")
+CSV_SAIDA = PROJECT_ROOT / "output/resultados.csv"
+BASELINE_VALIDACAO = PROJECT_ROOT / "output/analysis/baseline_validacao.json"
 TEST_LIMIT_PADRAO = 10
-INPUT_DIR = Path("input_raw/fotos_originais")
-LISTA_REPROCESSAR = Path("output/analysis/lista_reprocessar_sem_etiqueta.txt")
+INPUT_DIR = PROJECT_ROOT / "input_raw/fotos_originais"
+LISTA_REPROCESSAR = PROJECT_ROOT / "output/analysis/lista_reprocessar_sem_etiqueta.txt"
 INPROCESS_THRESHOLD_PADRAO = 20
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
-LOG_FILE = Path("output/pipeline.log")
+LOG_FILE = PROJECT_ROOT / "output/pipeline.log"
 
 
 def _setup_logging():
@@ -189,10 +192,11 @@ def main(
     mode: str = "auto",
     inprocess_threshold: int = INPROCESS_THRESHOLD_PADRAO,
     incremental: bool = False,
+    apenas: str | None = None,
 ):
     t_inicio = time.perf_counter()
 
-    if LIMPAR_SAIDAS and not incremental:
+    if LIMPAR_SAIDAS and not incremental and apenas is None:
         log.info("Limpando saídas anteriores...")
         limpar_saidas()
     elif incremental:
@@ -224,46 +228,74 @@ def main(
 
     runner = run_inprocess if use_inprocess else run
 
-    runner(
-        "scripts/1_detect_etiqueta.py" if use_inprocess else [sys.executable, "scripts/1_detect_etiqueta.py"],
-        "Rodando detecção de etiquetas...",
-        env_extra=detect_env,
-        step_idx=1,
-        step_total=5,
-    )
-    runner(
-        "scripts/2_preparar_quadrado_manual.py" if use_inprocess else [sys.executable, "scripts/2_preparar_quadrado_manual.py"],
-        "Preparando pasta quadrada manual...",
-        env_extra=seg_env if incremental else None,
-        step_idx=2,
-        step_total=5,
-    )
-    runner(
-        "scripts/3_segment_rembg.py" if use_inprocess else [sys.executable, "scripts/3_segment_rembg.py"],
-        "Rodando segmentação (rembg/isnet)...",
-        env_extra=seg_env,
-        step_idx=3,
-        step_total=5,
-    )
-    runner(
-        "scripts/4_renomear_final.py" if use_inprocess else [sys.executable, "scripts/4_renomear_final.py"],
-        "Renomeando e gerando CSV...",
-        env_extra=seg_env if incremental else None,
-        step_idx=4,
-        step_total=5,
-    )
-    runner(
-        "scripts/5_renomear_intermediarios.py" if use_inprocess else [sys.executable, "scripts/5_renomear_intermediarios.py"],
-        "Renomeando pastas intermediárias por código...",
-        env_extra=seg_env if incremental else None,
-        step_idx=5,
-        step_total=5,
-    )
+    scripts_dir = str(PROJECT_ROOT / "scripts")
 
-    if modo_full:
+    def _script(name: str):
+        path = f"{scripts_dir}/{name}"
+        return path if use_inprocess else [sys.executable, path]
+
+    # --- Definir etapas disponíveis ---
+    ETAPAS_TODAS = ["detectar", "preparar", "segmentar", "renomear", "renomear_inter"]
+    etapas_rodar = ETAPAS_TODAS if apenas is None else [apenas]
+
+    # Mapeamento de aliases
+    _ALIAS = {"renomear": ["renomear", "renomear_inter"]}
+    if apenas and apenas in _ALIAS:
+        etapas_rodar = _ALIAS[apenas]
+
+    step_total = len(etapas_rodar)
+    step_n = 0
+
+    if "detectar" in etapas_rodar:
+        step_n += 1
+        runner(
+            _script("1_detect_etiqueta.py"),
+            "Rodando detecção de etiquetas...",
+            env_extra=detect_env,
+            step_idx=step_n,
+            step_total=step_total,
+        )
+    if "preparar" in etapas_rodar:
+        step_n += 1
+        runner(
+            _script("2_preparar_quadrado_manual.py"),
+            "Preparando pasta quadrada manual...",
+            env_extra=seg_env if incremental else None,
+            step_idx=step_n,
+            step_total=step_total,
+        )
+    if "segmentar" in etapas_rodar:
+        step_n += 1
+        runner(
+            _script("3_segment_rembg.py"),
+            "Rodando segmentação (rembg/isnet)...",
+            env_extra=seg_env,
+            step_idx=step_n,
+            step_total=step_total,
+        )
+    if "renomear" in etapas_rodar:
+        step_n += 1
+        runner(
+            _script("4_renomear_final.py"),
+            "Renomeando e gerando CSV...",
+            env_extra=seg_env if incremental else None,
+            step_idx=step_n,
+            step_total=step_total,
+        )
+    if "renomear_inter" in etapas_rodar:
+        step_n += 1
+        runner(
+            _script("5_renomear_intermediarios.py"),
+            "Renomeando pastas intermediárias por código...",
+            env_extra=seg_env if incremental else None,
+            step_idx=step_n,
+            step_total=step_total,
+        )
+
+    if modo_full and apenas is None:
         if BASELINE_VALIDACAO.exists():
             run(
-                [sys.executable, "scripts/6_validar_saidas.py", "--mode", "validate"],
+                [sys.executable, str(PROJECT_ROOT / "scripts/6_validar_saidas.py"), "--mode", "validate"],
                 "Validando regressão de saídas...",
             )
         else:
@@ -271,7 +303,7 @@ def main(
                 "Baseline de validação não encontrado. "
                 "Crie com: python scripts/validar_saidas.py --mode create-baseline"
             )
-    else:
+    elif apenas is None:
         log.info("Validação automática pulada no modo teste rápido (use --full para validar baseline).")
 
     dt_total = time.perf_counter() - t_inicio
@@ -285,6 +317,12 @@ if __name__ == "__main__":
     parser.add_argument("--inprocess-threshold", type=int, default=INPROCESS_THRESHOLD_PADRAO, help=f"Threshold de itens para auto usar in-process (padrão: {INPROCESS_THRESHOLD_PADRAO})")
     parser.add_argument("--incremental", action="store_true", help="Preserva saídas e ativa cache de detecção/segmentação para reruns rápidos")
     parser.add_argument("--dry-run", action="store_true", help="Lista imagens que seriam processadas e estima tempo, sem processar nada")
+    parser.add_argument(
+        "--apenas",
+        choices=["detectar", "preparar", "segmentar", "renomear"],
+        default=None,
+        help="Roda apenas um módulo específico (detectar, preparar, segmentar, renomear)",
+    )
     args = parser.parse_args()
 
     if args.dry_run:
@@ -296,4 +334,5 @@ if __name__ == "__main__":
             mode=args.mode,
             inprocess_threshold=args.inprocess_threshold,
             incremental=args.incremental,
+            apenas=args.apenas,
         )

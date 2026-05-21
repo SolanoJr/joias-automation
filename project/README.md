@@ -75,6 +75,9 @@ python pipeline.py --limit 20             # Modo teste: N imagens
 python pipeline.py --full                 # Todas as imagens + validação
 python pipeline.py --incremental          # Preserva saídas, usa cache
 python pipeline.py --mode subprocess      # Força execução em subprocessos
+python pipeline.py --apenas detectar      # Só detecção YOLO (etapa 1)
+python pipeline.py --apenas segmentar     # Só segmentação rembg (etapa 3)
+python pipeline.py --apenas renomear      # Só renomeação + CSV (etapas 4+5)
 ```
 
 ## 📦 Dependências Python

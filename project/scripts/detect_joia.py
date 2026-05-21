@@ -385,8 +385,9 @@ if __name__ == "__main__":
     import sys
     import json
 
-    INPUT_DIR = Path("output/4_quadrado_manual")
-    OUT_DIR   = Path("output/debug_detect_joia")
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    INPUT_DIR = _PROJECT_ROOT / "output/4_quadrado_manual"
+    OUT_DIR   = _PROJECT_ROOT / "output/debug_detect_joia"
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     imgs = sorted(INPUT_DIR.glob("*.jpg"))[:10]

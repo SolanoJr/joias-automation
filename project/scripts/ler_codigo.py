@@ -43,10 +43,13 @@ if str(scripts_dir) not in sys.path:
 
 from barcode_etiqueta import ler_barcode_imagem
 
-PAINTS_DIR = Path("output/2_paints")
-ETI_DIR = Path("output/1_etiquetas")
-SEM_ETIQUETA_DIR = Path("output/3_sem_etiqueta")
-ORIGINAIS_DIR = Path("input_raw/fotos_originais")
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+PAINTS_DIR = PROJECT_ROOT / "output/2_paints"
+ETI_DIR = PROJECT_ROOT / "output/1_etiquetas"
+SEM_ETIQUETA_DIR = PROJECT_ROOT / "output/3_sem_etiqueta"
+ORIGINAIS_DIR = PROJECT_ROOT / "input_raw/fotos_originais"
 
 # Se o tesseract não estiver no PATH, descomenta e ajusta:
 # pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -87,7 +90,7 @@ OCR_ZOOM_MULTIPLIER_MEDIUM = float(os.getenv("OCR_ZOOM_MULTIPLIER_MEDIUM", "1.5"
 
 # ===== OCR CACHE CONFIG =====
 OCR_CACHE_ENABLED = os.getenv("OCR_CACHE_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
-OCR_CACHE_DIR = Path("output/cache_ocr")
+OCR_CACHE_DIR = PROJECT_ROOT / "output/cache_ocr"
 OCR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 def _get_file_hash(file_path: Path) -> str | None:

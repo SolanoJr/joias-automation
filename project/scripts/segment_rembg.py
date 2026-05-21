@@ -10,11 +10,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 USE_ORIGINAL_INPUT = False
-ORIGINAL_INPUT_DIR = Path("input_raw/fotos_originais")
-QUADRADO_MANUAL_INPUT_DIR = Path("output/4_quadrado_manual")
+ORIGINAL_INPUT_DIR = PROJECT_ROOT / "input_raw/fotos_originais"
+QUADRADO_MANUAL_INPUT_DIR = PROJECT_ROOT / "output/4_quadrado_manual"
 INPUT_DIR = ORIGINAL_INPUT_DIR if USE_ORIGINAL_INPUT else QUADRADO_MANUAL_INPUT_DIR
-OUTPUT_DIR = Path("output/5_segmentado_rembg")
+OUTPUT_DIR = PROJECT_ROOT / "output/5_segmentado_rembg"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SIZE = 1024

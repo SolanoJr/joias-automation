@@ -22,13 +22,16 @@ import cv2
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# ===== RAIZ DO PROJETO =====
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 # ===== PASTAS =====
-SEG_DIR       = Path("output/5_segmentado_rembg")
-FINAL_DIR     = Path("output/6_final")
-CSV_PATH      = Path("output/resultados.csv")
-HTML_PATH     = Path("output/relatorio.html")
-CACHE_PATH    = Path("output/rembg2_cache.json")
-ORIGINAIS_DIR = Path("input_raw/fotos_originais")
+SEG_DIR       = PROJECT_ROOT / "output/5_segmentado_rembg"
+FINAL_DIR     = PROJECT_ROOT / "output/6_final"
+CSV_PATH      = PROJECT_ROOT / "output/resultados.csv"
+HTML_PATH     = PROJECT_ROOT / "output/relatorio.html"
+CACHE_PATH    = PROJECT_ROOT / "output/rembg2_cache.json"
+ORIGINAIS_DIR = PROJECT_ROOT / "input_raw/fotos_originais"
 
 LIMPAR_FINAL_ANTES = True
 
@@ -315,8 +318,8 @@ def _aplicar_segunda_passagem_rembg(img_pil, cache: dict, file_hash: str):
 def _validar_precondicoes() -> None:
     if not SEG_DIR.exists() or not list(SEG_DIR.glob("*.jpg")):
         print(f"[AVISO] Etapa 5 nao foi rodada — {SEG_DIR} vazia ou inexistente.")
-    etiquetas_dir = Path("output/1_etiquetas")
-    paints_dir    = Path("output/2_paints")
+    etiquetas_dir = PROJECT_ROOT / "output/1_etiquetas"
+    paints_dir    = PROJECT_ROOT / "output/2_paints"
     if not etiquetas_dir.exists() and not paints_dir.exists():
         print("[AVISO] Etapas 1/2 nao foram rodadas — pastas de etiquetas e paints ausentes.")
 
@@ -401,7 +404,7 @@ def _buscar_antes(base: str, seg_path: Path) -> Path | None:
                 return p
 
     # 2. sem_etiqueta
-    se_dir = Path("output/3_sem_etiqueta")
+    se_dir = PROJECT_ROOT / "output/3_sem_etiqueta"
     if se_dir.exists():
         for suffix in ("_se", "_sem_etiqueta", ""):
             p = se_dir / f"{base}{suffix}.jpg"
