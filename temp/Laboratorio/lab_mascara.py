@@ -32,6 +32,9 @@ from lab_config import (
     ENABLE_SPECULAR_FILTER,
     SPECULAR_V_MIN,
     SPECULAR_S_MAX,
+    SPECULAR_NEIGHBOR_KSIZE,
+    SPECULAR_NEIGHBOR_S_MIN,
+    SPECULAR_MIN_CLUSTER_PX,
     ENABLE_EDGE_MASK,
     EDGE_CANNY_LOW,
     EDGE_CANNY_HIGH,
@@ -129,30 +132,65 @@ def _filtrar_fundo_branco(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
 
 def _filtrar_brilho_especular(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     """
-    Remove reflexos especulares (brilho intenso do metal) da máscara.
+    Remove reflexos especulares (brilho intenso do metal) da máscara,
+    distinguindo brilho de metal (na joia) de fundo branco real.
 
-    Reflexos especulares têm valor muito alto (V > 245) e saturação
-    muito baixa (S < 15). Esses pixels parecem fundo branco mas estão
-    sobre a joia. Removê-los da máscara melhora a silhueta.
-
-    Porém, só removemos se o pixel estiver na BORDA da máscara
-    (dilatação - erosão), para não criar buracos no meio da joia.
+    Usa três heurísticas para decidir se um pixel brilhante é fundo:
+      1. Vizinhança de saturação — se pixels ao redor têm cor (S alto),
+         o brilho é reflexo sobre a joia → preservar.
+      2. Região de borda — só remove candidatos na borda da máscara.
+      3. Cluster mínimo — ignora grupos < N pixels (ruído isolado).
     """
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     v_ch = hsv[:, :, 2]
     s_ch = hsv[:, :, 1]
 
+    # Candidatos especulares: V alto, S baixo
     especular = (v_ch >= SPECULAR_V_MIN) & (s_ch <= SPECULAR_S_MAX)
 
-    # Só aplicar na região de borda da máscara (não no interior)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    eroded = cv2.erode(mask, kernel, iterations=1)
+    if especular.sum() == 0:
+        return mask
+
+    # Heurística 1: vizinhança de saturação
+    # Blur grande no canal S para capturar contexto ao redor
+    k = SPECULAR_NEIGHBOR_KSIZE
+    s_neighborhood = cv2.blur(
+        s_ch.astype(np.float32), (k, k),
+    )
+    # Pixels com vizinhos coloridos estão SOBRE a joia → proteger
+    on_jewelry = s_neighborhood >= SPECULAR_NEIGHBOR_S_MIN
+
+    # Heurística 2: restringir à borda da máscara
+    kernel_borda = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    eroded = cv2.erode(mask, kernel_borda, iterations=1)
     borda = cv2.subtract(mask, eroded)
 
-    # Remover apenas reflexos que estão na borda
-    remover = especular & (borda > 0)
+    # Só remove se: especular E na borda E sem cor ao redor
+    candidatos = especular & (borda > 0) & (~on_jewelry)
+
+    if candidatos.sum() == 0:
+        return mask
+
+    # Heurística 3: filtrar clusters pequenos demais (ruído)
+    cand_mask = np.zeros_like(mask)
+    cand_mask[candidatos] = 255
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        cand_mask, connectivity=8,
+    )
+    remover = np.zeros_like(mask, dtype=bool)
+    for lbl in range(1, num_labels):
+        if stats[lbl, cv2.CC_STAT_AREA] >= SPECULAR_MIN_CLUSTER_PX:
+            remover[labels == lbl] = True
+
+    if not remover.any():
+        return mask
+
     mask_out = mask.copy()
     mask_out[remover] = 0
+
+    # Fechar buracos mínimos criados pela remoção
+    k_heal = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask_out = cv2.morphologyEx(mask_out, cv2.MORPH_CLOSE, k_heal)
 
     if mask_out.sum() < mask.sum() * 0.20:
         logger.warning("  Filtro especular removeu demais — ignorando")
