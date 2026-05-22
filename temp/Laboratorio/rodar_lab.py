@@ -28,7 +28,7 @@ _lab_dir = Path(__file__).resolve().parent
 if str(_lab_dir) not in sys.path:
     sys.path.insert(0, str(_lab_dir))
 
-from lab_config import OUTPUT_DIR, ENABLE_DIAGNOSTICS, SINGLE_MODEL, ENABLE_ENSEMBLE
+from lab_config import OUTPUT_DIR, ENABLE_DIAGNOSTICS, SINGLE_MODEL, ENABLE_ENSEMBLE, PROJECT_ROOT
 from lab_amostragem import selecionar_amostra, listar_imagens
 from lab_segmentacao import processar_imagem
 from lab_auditoria import (
@@ -44,6 +44,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger("lab")
 
+_MODEL_PATH = PROJECT_ROOT / "models" / "best.pt"
+
+
+def _verificar_ambiente():
+    """Verifica dependências e modelos, emitindo avisos amigáveis."""
+    avisos: list[str] = []
+
+    # Verificar modelo YOLO
+    if not _MODEL_PATH.exists():
+        avisos.append(
+            f"Modelo YOLO não encontrado em {_MODEL_PATH}\n"
+            "  → A Etapa 1 (detecção de etiquetas) do pipeline principal não funcionará.\n"
+            "  → O Laboratório continua funcionando normalmente:\n"
+            "    a pré-detecção usa heurísticas OpenCV (sem modelo),\n"
+            "    e a segmentação usa rembg (CPU-only).\n"
+            "  → Para habilitar a detecção YOLO, coloque o best.pt em project/models/."
+        )
+
+    # Verificar rembg
+    try:
+        import rembg  # noqa: F401
+    except ImportError:
+        avisos.append(
+            "rembg não instalado — segmentação não funcionará.\n"
+            "  → Instale com: pip install rembg[cpu]"
+        )
+
+    # Verificar OpenCV
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        avisos.append(
+            "opencv-python não instalado.\n"
+            "  → Instale com: pip install opencv-python-headless"
+        )
+
+    for aviso in avisos:
+        logger.warning(aviso)
+
+    return len(avisos) == 0 or all("YOLO" in a for a in avisos)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Laboratório de Segmentação de Joias")
@@ -54,6 +95,11 @@ def main():
     parser.add_argument("--n-max", type=int, default=None, help="Máximo de imagens na amostra")
     parser.add_argument("--todas", action="store_true", help="Processar todas as imagens (sem amostragem)")
     args = parser.parse_args()
+
+    # --- Verificar ambiente ---
+    if not _verificar_ambiente():
+        logger.error("Dependências críticas ausentes — abortando.")
+        sys.exit(1)
 
     input_dir = Path(args.input) if args.input else None
     output_dir = Path(args.output) if args.output else OUTPUT_DIR
