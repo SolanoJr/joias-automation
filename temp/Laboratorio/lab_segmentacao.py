@@ -261,7 +261,12 @@ def processar_imagem(
     metricas["etapas"].append("mascara_rembg_ok")
 
     # --- Refinamento ---
-    mask_refined = refinar_mascara(mask_rembg, img_bgr)
+    pre_detect_ok = (
+        det_info is not None
+        and det_info.get("usado", False)
+        and det_info.get("confianca", 0) >= PRE_DETECT_CONF_MIN
+    )
+    mask_refined = refinar_mascara(mask_rembg, img_bgr, pre_detect_ok=pre_detect_ok)
     fg_depois = int(mask_refined.sum() / 255)
     metricas["fg_pixels_antes"] = fg_antes
     metricas["fg_pixels_depois"] = fg_depois
