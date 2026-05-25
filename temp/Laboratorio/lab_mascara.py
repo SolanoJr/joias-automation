@@ -34,6 +34,9 @@ from lab_config import (
     LABEL_GREEN_H_MAX,
     LABEL_GREEN_S_MIN,
     LABEL_GREEN_V_MIN,
+    LABEL_DIST_SEPARATE,
+    ENABLE_EDGE_OBJECT_REMOVAL,
+    EDGE_OBJECT_METALLIC_S_MIN,
     ENABLE_SPECULAR_FILTER,
     SPECULAR_V_MIN,
     SPECULAR_S_MAX,
@@ -46,12 +49,17 @@ from lab_config import (
     EDGE_DILATE_ITER,
     ENABLE_GRABCUT,
     GRABCUT_ITER,
+    PRE_DETECT_CONF_MIN,
 )
 
 logger = logging.getLogger("lab")
 
 
-def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
+def refinar_mascara(
+    mask_bin: np.ndarray,
+    img_bgr: np.ndarray,
+    pre_detect_ok: bool = False,
+) -> np.ndarray:
     """
     Pipeline multi-estágio de refinamento.
     Retorna máscara binária refinada (0 ou 255).
@@ -66,19 +74,34 @@ def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
         )
         mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_OPEN, k_open)
 
-    # 2) Filtragem de componentes pequenos (preserva pares como brincos)
+    # 2) Filtragem de componentes (preserva pares; descarta etiqueta por brilho)
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         mask_bin, connectivity=8,
     )
     if num_labels > 2:
+        hsv_full = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
         areas = [stats[lbl, cv2.CC_STAT_AREA] for lbl in range(1, num_labels)]
         max_area = max(areas) if areas else 1
         for lbl in range(1, num_labels):
             area = stats[lbl, cv2.CC_STAT_AREA]
-            # Manter se: tamanho absoluto significativo OU
-            # tamanho relativo ao maior componente >= 15% (par/conjunto)
-            if area / total_area < MIN_COMPONENT_RATIO and area / max_area < 0.15:
-                mask_bin[labels == lbl] = 0
+            too_small_abs = area / total_area < MIN_COMPONENT_RATIO
+            too_small_rel = area / max_area < 0.15
+            if not (too_small_abs and too_small_rel):
+                # Candidate to keep — but check if it looks like a label
+                if area / max_area >= 0.15 and area / max_area < 0.85:
+                    comp_pixels = labels == lbl
+                    mean_s = float(hsv_full[:, :, 1][comp_pixels].mean())
+                    mean_v = float(hsv_full[:, :, 2][comp_pixels].mean())
+                    # Paper/label: very low saturation + high brightness
+                    if mean_s < 25 and mean_v > 200:
+                        logger.info(
+                            f"  Componente {lbl}: descartado (papel/etiqueta "
+                            f"S={mean_s:.0f} V={mean_v:.0f})"
+                        )
+                        mask_bin[labels == lbl] = 0
+                        continue
+                continue
+            mask_bin[labels == lbl] = 0
 
     # 3) Morphological closing — preenche buracos na silhueta
     if MORPH_CLOSE_KSIZE > 1:
@@ -97,7 +120,11 @@ def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
 
     # 5b) Filtro de etiquetas (verde/branco como fundo garantido)
     if ENABLE_LABEL_FILTER:
-        mask_bin = _filtrar_etiquetas(mask_bin, img_bgr)
+        mask_bin = _filtrar_etiquetas(mask_bin, img_bgr, pre_detect_ok=pre_detect_ok)
+
+    # 5c) Remoção de objetos de borda (papel/etiqueta colada nas margens)
+    if ENABLE_EDGE_OBJECT_REMOVAL:
+        mask_bin = _remover_objetos_borda(mask_bin, img_bgr)
 
     # 6) Filtro de brilho especular
     if ENABLE_SPECULAR_FILTER:
@@ -143,35 +170,44 @@ def _filtrar_fundo_branco(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     return mask_out
 
 
-def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
+def _filtrar_etiquetas(
+    mask: np.ndarray,
+    img_bgr: np.ndarray,
+    pre_detect_ok: bool = False,
+) -> np.ndarray:
     """
     Remove pixels de etiquetas (verde, branco) da máscara.
-    Etiquetas de joias são tipicamente verdes ou brancas com texto.
-    Se a pré-detecção falhou, este filtro usa a cor predominante
-    da etiqueta como 'fundo garantido'.
+    - Verde agressivo: H 30-95, S ≥ 25
+    - Branco-etiqueta: V ≥ 230, S ≤ 25 (excluindo metal brilhante)
+    - Se a pré-detecção encontrou a joia, usa distanceTransform + erosão
+      para desconectar a joia de etiquetas brancas coladas.
     """
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     h_ch = hsv[:, :, 0]
     s_ch = hsv[:, :, 1]
     v_ch = hsv[:, :, 2]
 
-    # Etiqueta verde: H em [35-85], S > 40, V > 40
+    # --- Etiqueta verde (range expandido) ---
     verde = (
-        (h_ch >= LABEL_GREEN_H_MIN) & (h_ch <= LABEL_GREEN_H_MAX) &
-        (s_ch >= LABEL_GREEN_S_MIN) & (v_ch >= LABEL_GREEN_V_MIN)
+        (h_ch >= LABEL_GREEN_H_MIN) & (h_ch <= LABEL_GREEN_H_MAX)
+        & (s_ch >= LABEL_GREEN_S_MIN) & (v_ch >= LABEL_GREEN_V_MIN)
     )
 
-    # Etiqueta branca já é coberta pelo filtro de fundo branco (etapa 5),
-    # mas reforçamos aqui com regiões brancas compactas (componentes conectados)
-    branco = (v_ch >= 240) & (s_ch <= 20)
+    # --- Etiqueta branca (excluindo brilho metálico) ---
+    branco_candidato = (v_ch >= 230) & (s_ch <= 25)
+    # Proteger pixels brilhantes com vizinhança saturada (metal)
+    s_blur = cv2.blur(s_ch.astype(np.float32), (15, 15))
+    metalico_vizinho = s_blur >= 20
+    branco = branco_candidato & (~metalico_vizinho)
 
     etiqueta = verde | branco
-    total_etiqueta = etiqueta.sum()
-    if total_etiqueta == 0:
-        return mask
 
-    mask_out = mask.copy()
-    mask_out[etiqueta] = 0
+    # --- Separação por distanceTransform (se pré-detect OK) ---
+    if pre_detect_ok and LABEL_DIST_SEPARATE:
+        mask_out = _separar_joia_etiqueta_dist(mask, etiqueta, img_bgr)
+    else:
+        mask_out = mask.copy()
+        mask_out[etiqueta] = 0
 
     # Safety: se removeu demais, ignorar
     if mask_out.sum() < mask.sum() * 0.15:
@@ -181,6 +217,145 @@ def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     fg_removed = int((mask.sum() - mask_out.sum()) / 255)
     if fg_removed > 0:
         logger.info(f"  Filtro de etiquetas: removeu {fg_removed} px")
+
+    return mask_out
+
+
+def _separar_joia_etiqueta_dist(
+    mask: np.ndarray,
+    etiqueta_map: np.ndarray,
+    img_bgr: np.ndarray,
+) -> np.ndarray:
+    """
+    Usa erosão + distanceTransform para desconectar a joia de etiquetas
+    brancas/verdes que estejam coladas na máscara. Depois reconstrói
+    apenas os componentes com brilho metálico.
+    """
+    # Erosão forte para quebrar pontes finas entre joia e etiqueta
+    k_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    eroded = cv2.erode(mask, k_erode, iterations=2)
+
+    # distanceTransform: pixels longe da borda (centro) sobrevivem
+    dist = cv2.distanceTransform(eroded, cv2.DIST_L2, 5)
+    # Normalizar e binarizar: manter apenas núcleos sólidos
+    if dist.max() > 0:
+        dist_norm = dist / dist.max()
+    else:
+        dist_norm = dist
+    nucleos = (dist_norm >= 0.25).astype(np.uint8) * 255
+
+    # Expandir núcleos de volta (dilatar) para recuperar a forma original
+    k_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    nucleos_expandidos = cv2.dilate(nucleos, k_dilate, iterations=2)
+
+    # Intersecção com a máscara original: recuperar forma
+    reconstruido = cv2.bitwise_and(mask, nucleos_expandidos)
+
+    # Agora classificar componentes: manter apenas os metálicos
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        reconstruido, connectivity=8,
+    )
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    mask_out = np.zeros_like(mask)
+
+    for lbl in range(1, num_labels):
+        comp_pixels = labels == lbl
+        area = stats[lbl, cv2.CC_STAT_AREA]
+        if area < 50:
+            continue
+        mean_s = float(hsv[:, :, 1][comp_pixels].mean())
+        mean_v = float(hsv[:, :, 2][comp_pixels].mean())
+        # Componente metálico: tem alguma saturação OU brilho alto com variação
+        v_std = float(hsv[:, :, 2][comp_pixels].std())
+        is_metallic = mean_s >= 15 or v_std >= 30
+        is_paper = mean_s < 15 and mean_v > 210 and v_std < 20
+        if is_paper:
+            logger.info(
+                f"  distTransform: componente {lbl} descartado "
+                f"(papel S={mean_s:.0f} V={mean_v:.0f} Vstd={v_std:.0f})"
+            )
+            continue
+        # Manter: usar a forma original (não erodida) nesta região
+        region_original = cv2.bitwise_and(mask, mask, mask=comp_pixels.astype(np.uint8) * 255)
+        # Expandir um pouco para recuperar bordas perdidas na erosão
+        k_recover = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        region_expanded = cv2.dilate(region_original, k_recover, iterations=1)
+        region_final = cv2.bitwise_and(mask, region_expanded)
+        mask_out = cv2.bitwise_or(mask_out, region_final)
+
+    # Se a reconstrução perdeu demais, fallback para remoção simples
+    if mask_out.sum() < mask.sum() * 0.20:
+        logger.warning("  distTransform: reconstrução fraca, fallback simples")
+        mask_out = mask.copy()
+        mask_out[etiqueta_map] = 0
+
+    return mask_out
+
+
+def _remover_objetos_borda(
+    mask: np.ndarray,
+    img_bgr: np.ndarray,
+) -> np.ndarray:
+    """
+    Identifica componentes que tocam as bordas do crop.
+    Se o componente toca a borda E não tem brilho especular/metálico,
+    é marcado como fundo (papel/etiqueta).
+    """
+    h, w = mask.shape[:2]
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask, connectivity=8,
+    )
+    if num_labels <= 1:
+        return mask
+
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    mask_out = mask.copy()
+    removed_any = False
+
+    for lbl in range(1, num_labels):
+        x0 = stats[lbl, cv2.CC_STAT_LEFT]
+        y0 = stats[lbl, cv2.CC_STAT_TOP]
+        bw = stats[lbl, cv2.CC_STAT_WIDTH]
+        bh = stats[lbl, cv2.CC_STAT_HEIGHT]
+        area = stats[lbl, cv2.CC_STAT_AREA]
+
+        # Verificar se toca alguma borda do crop
+        touches_left = x0 == 0
+        touches_top = y0 == 0
+        touches_right = (x0 + bw) >= w
+        touches_bottom = (y0 + bh) >= h
+        touches_border = touches_left or touches_top or touches_right or touches_bottom
+
+        if not touches_border:
+            continue
+
+        # Ignorar se for o componente dominante (joia principal)
+        total_fg = int(mask.sum() / 255)
+        if total_fg > 0 and area / total_fg > 0.5:
+            continue
+
+        # Analisar cor: componentes metálicos têm saturação ou variação de V
+        comp_pixels = labels == lbl
+        mean_s = float(hsv[:, :, 1][comp_pixels].mean())
+        mean_v = float(hsv[:, :, 2][comp_pixels].mean())
+        v_std = float(hsv[:, :, 2][comp_pixels].std())
+
+        is_metallic = (
+            mean_s >= EDGE_OBJECT_METALLIC_S_MIN
+            or (mean_v > 150 and v_std > 40)
+        )
+
+        if not is_metallic:
+            mask_out[comp_pixels] = 0
+            removed_any = True
+            logger.info(
+                f"  Borda: componente {lbl} removido "
+                f"(toca borda, S={mean_s:.0f} V={mean_v:.0f} Vstd={v_std:.0f})"
+            )
+
+    if removed_any and mask_out.sum() < mask.sum() * 0.15:
+        logger.warning("  Filtro de borda removeu demais — ignorando")
+        return mask
 
     return mask_out
 

@@ -47,10 +47,19 @@ COLOR_WHITE_S_MAX = int(os.getenv("LAB_COLOR_WHITE_S_MAX", "30"))
 ENABLE_LABEL_FILTER = os.getenv("LAB_ENABLE_LABEL_FILTER", "1").strip().lower() in {
     "1", "true", "yes", "on",
 }
-LABEL_GREEN_H_MIN = int(os.getenv("LAB_LABEL_GREEN_H_MIN", "35"))
-LABEL_GREEN_H_MAX = int(os.getenv("LAB_LABEL_GREEN_H_MAX", "85"))
-LABEL_GREEN_S_MIN = int(os.getenv("LAB_LABEL_GREEN_S_MIN", "40"))
+LABEL_GREEN_H_MIN = int(os.getenv("LAB_LABEL_GREEN_H_MIN", "30"))
+LABEL_GREEN_H_MAX = int(os.getenv("LAB_LABEL_GREEN_H_MAX", "95"))
+LABEL_GREEN_S_MIN = int(os.getenv("LAB_LABEL_GREEN_S_MIN", "25"))
 LABEL_GREEN_V_MIN = int(os.getenv("LAB_LABEL_GREEN_V_MIN", "40"))
+LABEL_DIST_SEPARATE = os.getenv("LAB_LABEL_DIST_SEPARATE", "1").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
+# ===== REMOÇÃO DE OBJETOS DE BORDA =====
+ENABLE_EDGE_OBJECT_REMOVAL = os.getenv("LAB_ENABLE_EDGE_OBJECT_REMOVAL", "1").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+EDGE_OBJECT_METALLIC_S_MIN = int(os.getenv("LAB_EDGE_OBJECT_METALLIC_S_MIN", "30"))
 
 # ===== REFINAMENTO POR BRILHO METÁLICO =====
 ENABLE_SPECULAR_FILTER = os.getenv("LAB_ENABLE_SPECULAR_FILTER", "1").strip().lower() in {
