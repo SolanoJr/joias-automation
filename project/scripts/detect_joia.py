@@ -329,17 +329,35 @@ def detectar_joia(img_bgr: np.ndarray) -> DeteccaoJoia:
     bbox = (x1, y1, x2, y2)
     metricas = _calcular_metricas(bbox, (h_orig, w_orig))
 
-    # Calcula confiança baseada nos scores e tamanho do bbox
+    # Calcula confiança baseada no contraste da grade (foco) e força do sinal
     area_util = metricas["area_util"]
-    # Penaliza bbox muito grande (>80% da imagem = provavelmente pegou tudo)
-    penalidade_grande = max(0.0, (area_util - 0.80) * 2.0) if area_util > 0.80 else 0.0
-    # Penaliza bbox muito pequeno (<3% da imagem)
-    penalidade_pequeno = max(0.0, (0.03 - area_util) * 5.0) if area_util < 0.03 else 0.0
 
-    confianca = (
-        score_d * peso_d + score_c * peso_c + score_b * peso_b
-    ) / (peso_d + peso_c + peso_b)
-    confianca = float(np.clip(confianca - penalidade_grande - penalidade_pequeno, 0.0, 1.0))
+    max_cell = float(grade.max())
+    if max_cell < 1e-6:
+        confianca = 0.0
+    else:
+        # Quantas células estão ativas vs total (mede foco da detecção)
+        threshold_cell = max_cell * 0.35
+        active_ratio = float((grade >= threshold_cell).sum()) / grade.size
+        focus = 1.0 - active_ratio  # 1.0 = poucas células (focado), 0.0 = tudo ativo
+
+        # Sinal = média ponderada dos scores (mesmo cálculo anterior)
+        signal = (score_d * peso_d + score_c * peso_c + score_b * peso_b) / (peso_d + peso_c + peso_b)
+
+        # Confiança = força do pico × (base + bônus de foco)
+        confianca = max_cell * (0.4 + 0.6 * focus) * (0.5 + signal)
+
+        # Penalidade suave para bbox muito grande (multiplicativa, não subtrativa)
+        if area_util > 0.90:
+            confianca *= 0.65
+        elif area_util > 0.80:
+            confianca *= 0.80
+
+        # Penalidade para bbox muito pequeno
+        if area_util < 0.03:
+            confianca *= max(0.1, area_util / 0.03)
+
+        confianca = float(np.clip(confianca, 0.0, 1.0))
 
     return DeteccaoJoia(
         bbox=bbox,

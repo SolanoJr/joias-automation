@@ -43,6 +43,15 @@ ENABLE_COLOR_REFINE = os.getenv("LAB_ENABLE_COLOR_REFINE", "1").strip().lower() 
 COLOR_WHITE_V_MIN = int(os.getenv("LAB_COLOR_WHITE_V_MIN", "230"))
 COLOR_WHITE_S_MAX = int(os.getenv("LAB_COLOR_WHITE_S_MAX", "30"))
 
+# ===== FILTRO DE ETIQUETAS (verde/branco como fundo garantido) =====
+ENABLE_LABEL_FILTER = os.getenv("LAB_ENABLE_LABEL_FILTER", "1").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+LABEL_GREEN_H_MIN = int(os.getenv("LAB_LABEL_GREEN_H_MIN", "35"))
+LABEL_GREEN_H_MAX = int(os.getenv("LAB_LABEL_GREEN_H_MAX", "85"))
+LABEL_GREEN_S_MIN = int(os.getenv("LAB_LABEL_GREEN_S_MIN", "40"))
+LABEL_GREEN_V_MIN = int(os.getenv("LAB_LABEL_GREEN_V_MIN", "40"))
+
 # ===== REFINAMENTO POR BRILHO METÁLICO =====
 ENABLE_SPECULAR_FILTER = os.getenv("LAB_ENABLE_SPECULAR_FILTER", "1").strip().lower() in {
     "1", "true", "yes", "on",
@@ -79,7 +88,7 @@ ZOOM_MIN = float(os.getenv("LAB_ZOOM_MIN", "0.5"))
 ENABLE_PRE_DETECT = os.getenv("LAB_ENABLE_PRE_DETECT", "1").strip().lower() in {
     "1", "true", "yes", "on",
 }
-PRE_DETECT_CONF_MIN = float(os.getenv("LAB_PRE_DETECT_CONF_MIN", "0.30"))
+PRE_DETECT_CONF_MIN = float(os.getenv("LAB_PRE_DETECT_CONF_MIN", "0.15"))
 
 # ===== HULL CONVEXO =====
 ENABLE_CONVEX_HULL = os.getenv("LAB_ENABLE_CONVEX_HULL", "0").strip().lower() in {

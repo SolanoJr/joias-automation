@@ -29,6 +29,11 @@ from lab_config import (
     ENABLE_COLOR_REFINE,
     COLOR_WHITE_V_MIN,
     COLOR_WHITE_S_MAX,
+    ENABLE_LABEL_FILTER,
+    LABEL_GREEN_H_MIN,
+    LABEL_GREEN_H_MAX,
+    LABEL_GREEN_S_MIN,
+    LABEL_GREEN_V_MIN,
     ENABLE_SPECULAR_FILTER,
     SPECULAR_V_MIN,
     SPECULAR_S_MAX,
@@ -61,14 +66,18 @@ def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
         )
         mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_OPEN, k_open)
 
-    # 2) Filtragem de componentes pequenos
+    # 2) Filtragem de componentes pequenos (preserva pares como brincos)
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         mask_bin, connectivity=8,
     )
     if num_labels > 2:
+        areas = [stats[lbl, cv2.CC_STAT_AREA] for lbl in range(1, num_labels)]
+        max_area = max(areas) if areas else 1
         for lbl in range(1, num_labels):
             area = stats[lbl, cv2.CC_STAT_AREA]
-            if area / total_area < MIN_COMPONENT_RATIO:
+            # Manter se: tamanho absoluto significativo OU
+            # tamanho relativo ao maior componente >= 15% (par/conjunto)
+            if area / total_area < MIN_COMPONENT_RATIO and area / max_area < 0.15:
                 mask_bin[labels == lbl] = 0
 
     # 3) Morphological closing — preenche buracos na silhueta
@@ -85,6 +94,10 @@ def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     # 5) Filtro de fundo branco/papel
     if ENABLE_COLOR_REFINE:
         mask_bin = _filtrar_fundo_branco(mask_bin, img_bgr)
+
+    # 5b) Filtro de etiquetas (verde/branco como fundo garantido)
+    if ENABLE_LABEL_FILTER:
+        mask_bin = _filtrar_etiquetas(mask_bin, img_bgr)
 
     # 6) Filtro de brilho especular
     if ENABLE_SPECULAR_FILTER:
@@ -126,6 +139,48 @@ def _filtrar_fundo_branco(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     if mask_out.sum() < mask.sum() * 0.15:
         logger.warning("  Filtro de fundo branco removeu demais — ignorando")
         return mask
+
+    return mask_out
+
+
+def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Remove pixels de etiquetas (verde, branco) da máscara.
+    Etiquetas de joias são tipicamente verdes ou brancas com texto.
+    Se a pré-detecção falhou, este filtro usa a cor predominante
+    da etiqueta como 'fundo garantido'.
+    """
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    h_ch = hsv[:, :, 0]
+    s_ch = hsv[:, :, 1]
+    v_ch = hsv[:, :, 2]
+
+    # Etiqueta verde: H em [35-85], S > 40, V > 40
+    verde = (
+        (h_ch >= LABEL_GREEN_H_MIN) & (h_ch <= LABEL_GREEN_H_MAX) &
+        (s_ch >= LABEL_GREEN_S_MIN) & (v_ch >= LABEL_GREEN_V_MIN)
+    )
+
+    # Etiqueta branca já é coberta pelo filtro de fundo branco (etapa 5),
+    # mas reforçamos aqui com regiões brancas compactas (componentes conectados)
+    branco = (v_ch >= 240) & (s_ch <= 20)
+
+    etiqueta = verde | branco
+    total_etiqueta = etiqueta.sum()
+    if total_etiqueta == 0:
+        return mask
+
+    mask_out = mask.copy()
+    mask_out[etiqueta] = 0
+
+    # Safety: se removeu demais, ignorar
+    if mask_out.sum() < mask.sum() * 0.15:
+        logger.warning("  Filtro de etiquetas removeu demais — ignorando")
+        return mask
+
+    fg_removed = int((mask.sum() - mask_out.sum()) / 255)
+    if fg_removed > 0:
+        logger.info(f"  Filtro de etiquetas: removeu {fg_removed} px")
 
     return mask_out
 
@@ -285,17 +340,39 @@ def _aplicar_grabcut(mask_init: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
 
 
 def calcular_centroide_e_bbox(mask: np.ndarray) -> tuple | None:
-    """Retorna (cX, cY, x, y, w, h) do maior contorno, ou None."""
+    """
+    Retorna (cX, cY, x, y, w, h) englobando TODOS os contornos significativos.
+    Isso garante que pares (brincos, conjuntos) fiquem centralizados juntos.
+    """
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None
 
-    cnt = max(contours, key=cv2.contourArea)
-    M = cv2.moments(cnt)
-    if M["m00"] == 0:
+    # Filtrar contornos com área > 0
+    valid = [c for c in contours if cv2.contourArea(c) > 0]
+    if not valid:
         return None
 
-    cX = int(M["m10"] / M["m00"])
-    cY = int(M["m01"] / M["m00"])
-    x, y, w, h = cv2.boundingRect(cnt)
+    # Concatenar todos os contornos significativos para bbox único
+    max_area = max(cv2.contourArea(c) for c in valid)
+    relevant = [c for c in valid if cv2.contourArea(c) >= max_area * 0.10]
+    all_pts = np.vstack(relevant)
+    x, y, w, h = cv2.boundingRect(all_pts)
+
+    # Centroide ponderado por área de cada contorno
+    total_m00 = 0.0
+    sum_cx = 0.0
+    sum_cy = 0.0
+    for cnt in relevant:
+        M = cv2.moments(cnt)
+        if M["m00"] > 0:
+            total_m00 += M["m00"]
+            sum_cx += M["m10"]
+            sum_cy += M["m01"]
+
+    if total_m00 == 0:
+        return None
+
+    cX = int(sum_cx / total_m00)
+    cY = int(sum_cy / total_m00)
     return cX, cY, x, y, w, h
