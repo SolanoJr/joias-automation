@@ -75,6 +75,7 @@ def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
         mask_bin = cv2.morphologyEx(mask_bin, cv2.MORPH_OPEN, k_open)
 
     # 2) Filtragem de componentes pequenos (preserva pares como brincos)
+    # AJUSTE DE EMERGÊNCIA: Reduzir a agressividade para não apagar brincos pequenos
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         mask_bin, connectivity=8,
     )
@@ -84,8 +85,8 @@ def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
         for lbl in range(1, num_labels):
             area = stats[lbl, cv2.CC_STAT_AREA]
             # Manter se: tamanho absoluto significativo OU
-            # tamanho relativo ao maior componente >= 15% (par/conjunto)
-            if area / total_area < MIN_COMPONENT_RATIO and area / max_area < 0.15:
+            # tamanho relativo ao maior componente >= 5% (par/conjunto pequeno)
+            if area / total_area < (MIN_COMPONENT_RATIO / 2) and area / max_area < 0.05:
                 mask_bin[labels == lbl] = 0
 
     # 3) Morphological closing — preenche buracos na silhueta
@@ -169,6 +170,9 @@ def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     Etiquetas de joias são tipicamente verdes ou brancas com texto.
     Se a pré-detecção falhou, este filtro usa a cor predominante
     da etiqueta como 'fundo garantido'.
+    
+    INVERSÃO DE LÓGICA: A joia tem brilho especular e contraste.
+    A etiqueta é fosca (verde ou branca).
     """
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     h_ch = hsv[:, :, 0]
@@ -182,11 +186,15 @@ def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
         (v_ch >= LABEL_GREEN_V_MIN)
     )
 
-    # Etiqueta branca já é coberta pelo filtro de fundo branco (etapa 5),
-    # mas reforçamos aqui com regiões brancas compactas (componentes conectados)
-    branco = (v_ch >= 240) & (s_ch <= 20)
+    # Etiqueta branca: V alto, S baixo (fosco)
+    branco = (v_ch >= 200) & (s_ch <= 30)
 
     etiqueta = verde | branco
+    
+    # Proteger pixels com brilho especular (alta probabilidade de ser joia)
+    brilho_especular = (v_ch >= 245) & (s_ch <= 15)
+    etiqueta = etiqueta & (~brilho_especular)
+
     total_etiqueta = etiqueta.sum()
     if total_etiqueta == 0:
         return mask
@@ -195,8 +203,8 @@ def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     mask_out[etiqueta] = 0
 
     # Safety: se removeu demais, ignorar
-    if mask_out.sum() < mask.sum() * 0.15:
-        logger.warning("  Filtro de etiquetas removeu demais — ignorando")
+    if mask_out.sum() < mask.sum() * 0.05: # Reduzido para permitir remoção de etiquetas grandes
+        logger.warning("  Filtro de etiquetas removeu quase tudo — ignorando")
         return mask
 
     fg_removed = int((mask.sum() - mask_out.sum()) / 255)
@@ -227,12 +235,16 @@ def _filtrar_formas_geometricas(mask: np.ndarray) -> np.ndarray:
         approx = cv2.approxPolyDP(cnt, 0.04 * perimeter, True)
 
         # Verifica se é um retângulo (4 vértices) e remove imediatamente
+        # AJUSTE DE EMERGÊNCIA: Só remove se for um retângulo claro e não for muito pequeno
         if len(approx) == 4:
             x, y, w_cnt, h_cnt = cv2.boundingRect(cnt)
             aspect_ratio = float(w_cnt) / h_cnt
-            # Considera como etiqueta retangular, remove da máscara
-            cv2.drawContours(mask_out, [cnt], -1, 0, cv2.FILLED)
-            logger.info(f"  Filtro geométrico: removeu retângulo com área {area} e aspect_ratio {aspect_ratio:.2f}")
+            
+            # Verifica se a área é grande o suficiente para ser uma etiqueta (evita apagar brincos quadrados)
+            if area / total_area > GEOMETRIC_MIN_RECT_AREA_RATIO:
+                # Considera como etiqueta retangular, remove da máscara
+                cv2.drawContours(mask_out, [cnt], -1, 0, cv2.FILLED)
+                logger.info(f"  Filtro geométrico: removeu retângulo com área {area} e aspect_ratio {aspect_ratio:.2f}")
 
     # Safety check: se removeu demais, ignora
     if mask_out.sum() < mask.sum() * 0.15:

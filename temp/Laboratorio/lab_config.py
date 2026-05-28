@@ -29,7 +29,7 @@ AMOSTRA_SEED = os.getenv("LAB_AMOSTRA_SEED", "")  # vazio = aleatório real
 # ===== MORFOLOGIA =====
 MORPH_OPEN_KSIZE = int(os.getenv("LAB_MORPH_OPEN_KSIZE", "3"))
 MORPH_CLOSE_KSIZE = int(os.getenv("LAB_MORPH_CLOSE_KSIZE", "7"))
-MIN_COMPONENT_RATIO = float(os.getenv("LAB_MIN_COMPONENT_RATIO", "0.005"))
+MIN_COMPONENT_RATIO = float(os.getenv("LAB_MIN_COMPONENT_RATIO", "0.0025"))
 
 # ===== GRABCUT =====
 ENABLE_GRABCUT = os.getenv("LAB_ENABLE_GRABCUT", "1").strip().lower() in {
@@ -41,7 +41,7 @@ GRABCUT_ITER = int(os.getenv("LAB_GRABCUT_ITER", "3"))
 ENABLE_COLOR_REFINE = os.getenv("LAB_ENABLE_COLOR_REFINE", "1").strip().lower() in {
     "1", "true", "yes", "on",
 }
-COLOR_WHITE_V_MIN = int(os.getenv("LAB_COLOR_WHITE_V_MIN", "230"))
+COLOR_WHITE_V_MIN = int(os.getenv("LAB_COLOR_WHITE_V_MIN", "200"))
 COLOR_WHITE_S_MAX = int(os.getenv("LAB_COLOR_WHITE_S_MAX", "30"))
 
 # ===== FILTRO DE ETIQUETAS (verde/branco como fundo garantido) =====
