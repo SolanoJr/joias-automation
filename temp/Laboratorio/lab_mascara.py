@@ -34,6 +34,11 @@ from lab_config import (
     LABEL_GREEN_H_MAX,
     LABEL_GREEN_S_MIN,
     LABEL_GREEN_V_MIN,
+    LABEL_GREEN_S_MAX,
+    ENABLE_GEOMETRIC_FILTER,
+    GEOMETRIC_MIN_RECT_AREA_RATIO,
+    GEOMETRIC_MAX_ASPECT_RATIO_DIFF,
+    ENABLE_WATERSHED_SEPARATION,
     ENABLE_SPECULAR_FILTER,
     SPECULAR_V_MIN,
     SPECULAR_S_MAX,
@@ -46,6 +51,9 @@ from lab_config import (
     EDGE_DILATE_ITER,
     ENABLE_GRABCUT,
     GRABCUT_ITER,
+    ENABLE_INTENSITY_SEPARATION,
+    INTENSITY_V_THRESHOLD,
+    INTENSITY_MIN_RATIO,
 )
 
 logger = logging.getLogger("lab")
@@ -99,9 +107,21 @@ def refinar_mascara(mask_bin: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     if ENABLE_LABEL_FILTER:
         mask_bin = _filtrar_etiquetas(mask_bin, img_bgr)
 
+    # 5c) Filtro geométrico para remover retângulos perfeitos (etiquetas)
+    if ENABLE_GEOMETRIC_FILTER:
+        mask_bin = _filtrar_formas_geometricas(mask_bin)
+
+    # 5d) Separação de objetos com Watershed (para brincos deitados/colados)
+    if ENABLE_WATERSHED_SEPARATION:
+        mask_bin = _separar_objetos_watershed(mask_bin)
+
     # 6) Filtro de brilho especular
     if ENABLE_SPECULAR_FILTER:
         mask_bin = _filtrar_brilho_especular(mask_bin, img_bgr)
+
+    # 6b) Separação por intensidade — remove regiões muito claras (etiquetas)
+    if ENABLE_INTENSITY_SEPARATION:
+        mask_bin = _separar_por_intensidade(mask_bin, img_bgr)
 
     # 7) Reforço por bordas — recupera silhueta perdida
     if ENABLE_EDGE_MASK:
@@ -155,10 +175,11 @@ def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     s_ch = hsv[:, :, 1]
     v_ch = hsv[:, :, 2]
 
-    # Etiqueta verde: H em [35-85], S > 40, V > 40
+    # Etiqueta verde: H em [35-85], S em [LABEL_GREEN_S_MIN, LABEL_GREEN_S_MAX], V em [LABEL_GREEN_V_MIN, 255]
     verde = (
         (h_ch >= LABEL_GREEN_H_MIN) & (h_ch <= LABEL_GREEN_H_MAX) &
-        (s_ch >= LABEL_GREEN_S_MIN) & (v_ch >= LABEL_GREEN_V_MIN)
+        (s_ch >= LABEL_GREEN_S_MIN) & (s_ch <= LABEL_GREEN_S_MAX) &
+        (v_ch >= LABEL_GREEN_V_MIN)
     )
 
     # Etiqueta branca já é coberta pelo filtro de fundo branco (etapa 5),
@@ -181,6 +202,82 @@ def _filtrar_etiquetas(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
     fg_removed = int((mask.sum() - mask_out.sum()) / 255)
     if fg_removed > 0:
         logger.info(f"  Filtro de etiquetas: removeu {fg_removed} px")
+
+    return mask_out
+
+
+def _filtrar_formas_geometricas(mask: np.ndarray) -> np.ndarray:
+    """
+    Remove formas que se assemelham a retângulos perfeitos, como etiquetas.
+    Usa heurísticas baseadas em contornos e suas propriedades geométricas.
+    """
+    mask_out = mask.copy()
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    h, w = mask.shape[:2]
+    total_area = h * w
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area == 0:
+            continue
+
+        # Aproximação poligonal para verificar se é um retângulo
+        perimeter = cv2.arcLength(cnt, True)
+        approx = cv2.approxPolyDP(cnt, 0.04 * perimeter, True)
+
+        # Verifica se é um retângulo (4 vértices) e remove imediatamente
+        if len(approx) == 4:
+            x, y, w_cnt, h_cnt = cv2.boundingRect(cnt)
+            aspect_ratio = float(w_cnt) / h_cnt
+            # Considera como etiqueta retangular, remove da máscara
+            cv2.drawContours(mask_out, [cnt], -1, 0, cv2.FILLED)
+            logger.info(f"  Filtro geométrico: removeu retângulo com área {area} e aspect_ratio {aspect_ratio:.2f}")
+
+    # Safety check: se removeu demais, ignora
+    if mask_out.sum() < mask.sum() * 0.15:
+        logger.warning("  Filtro geométrico removeu demais — ignorando")
+        return mask
+
+    return mask_out
+
+
+def _separar_objetos_watershed(mask: np.ndarray) -> np.ndarray:
+    """
+    Usa distanceTransform e watershed para separar objetos conectados na máscara.
+    Útil para brincos deitados ou joias coladas em etiquetas.
+    """
+    # Converter a máscara para CV_8U se ainda não for
+    mask_8u = mask.astype(np.uint8)
+
+    # Encontrar a distância euclidiana para o pixel de fundo mais próximo
+    dist_transform = cv2.distanceTransform(mask_8u, cv2.DIST_L2, 5)
+
+    # Encontrar os picos locais (prováveis centros dos objetos)
+    _, sure_fg = cv2.threshold(dist_transform, 0.7 * dist_transform.max(), 255, 0)
+    sure_fg = np.uint8(sure_fg)
+
+    # Encontrar a região de fundo (pixels que não são joia)
+    unknown = cv2.subtract(mask_8u, sure_fg)
+
+    # Marcadores para o algoritmo Watershed
+    num_labels, markers = cv2.connectedComponents(sure_fg)
+    # Adicionar 1 a todos os marcadores para que o fundo seja 1 e os objetos comecem em 2
+    markers = markers + 1
+    # Marcar a região desconhecida com 0
+    markers[unknown == 255] = 0
+
+    # Aplicar Watershed
+    # A imagem original não é usada diretamente, mas é necessária para a função
+    # Criamos uma imagem falsa 3 canais para o watershed
+    img_fake = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+    markers = cv2.watershed(img_fake, markers)
+
+    # A máscara final é onde markers > 1 (não é fundo nem região desconhecida)
+    mask_out = np.zeros_like(mask, dtype=np.uint8)
+    mask_out[markers > 1] = 255
+
+    logger.info(f"  Watershed: separou {num_labels - 1} objetos.")
 
     return mask_out
 
@@ -251,6 +348,40 @@ def _filtrar_brilho_especular(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarr
         logger.warning("  Filtro especular removeu demais — ignorando")
         return mask
 
+    return mask_out
+
+
+def _separar_por_intensidade(mask: np.ndarray, img_bgr: np.ndarray) -> np.ndarray:
+    """
+    Remove regiões muito claras (etiquetas) da máscara baseado na intensidade (canal V do HSV).
+    
+    Etiquetas de joias são tipicamente brancas ou muito claras (V alto),
+    enquanto as joias têm variações de cor e intensidade mais baixas.
+    
+    Esta é uma implementação leve para CPU (i5-2400S), usando apenas
+    operações simples de threshold e connected components.
+    """
+    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+    v_ch = hsv[:, :, 2]
+    
+    # Regiões muito claras: V acima do threshold
+    muito_claro = v_ch >= INTENSITY_V_THRESHOLD
+    
+    if muito_claro.sum() == 0:
+        return mask
+    
+    mask_out = mask.copy()
+    mask_out[muito_claro] = 0
+    
+    # Safety check: se removeu demais, ignorar
+    if mask_out.sum() < mask.sum() * INTENSITY_MIN_RATIO:
+        logger.warning("  Separação por intensidade removeu demais — ignorando")
+        return mask
+    
+    fg_removed = int((mask.sum() - mask_out.sum()) / 255)
+    if fg_removed > 0:
+        logger.info(f"  Separação por intensidade: removeu {fg_removed} px")
+    
     return mask_out
 
 

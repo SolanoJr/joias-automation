@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent / "project"
 # ===== PASTAS =====
 INPUT_DIR = Path(os.getenv("LAB_INPUT_DIR", str(PROJECT_ROOT / "input_raw/fotos_originais")))
 OUTPUT_DIR = Path(os.getenv("LAB_OUTPUT_DIR", str(Path(__file__).resolve().parent / "resultados")))
+GOLDEN_SET_DIR = Path(os.getenv("LAB_GOLDEN_SET_DIR", str(Path(__file__).resolve().parent / "golden_set")))
 
 # ===== CANVAS =====
 CANVAS_SIZE = int(os.getenv("LAB_CANVAS_SIZE", "1024"))
@@ -50,7 +51,20 @@ ENABLE_LABEL_FILTER = os.getenv("LAB_ENABLE_LABEL_FILTER", "1").strip().lower() 
 LABEL_GREEN_H_MIN = int(os.getenv("LAB_LABEL_GREEN_H_MIN", "35"))
 LABEL_GREEN_H_MAX = int(os.getenv("LAB_LABEL_GREEN_H_MAX", "85"))
 LABEL_GREEN_S_MIN = int(os.getenv("LAB_LABEL_GREEN_S_MIN", "40"))
+LABEL_GREEN_S_MAX = int(os.getenv("LAB_LABEL_GREEN_S_MAX", "255"))
 LABEL_GREEN_V_MIN = int(os.getenv("LAB_LABEL_GREEN_V_MIN", "40"))
+
+# ===== FILTRO GEOMÉTRICO (retângulos perfeitos) =====
+ENABLE_GEOMETRIC_FILTER = os.getenv("LAB_ENABLE_GEOMETRIC_FILTER", "1").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+GEOMETRIC_MIN_RECT_AREA_RATIO = float(os.getenv("LAB_GEOMETRIC_MIN_RECT_AREA_RATIO", "0.001"))
+GEOMETRIC_MAX_ASPECT_RATIO_DIFF = float(os.getenv("LAB_GEOMETRIC_MAX_ASPECT_RATIO_DIFF", "0.2"))
+
+# ===== SEPARAÇÃO POR WATERSHED =====
+ENABLE_WATERSHED_SEPARATION = os.getenv("LAB_ENABLE_WATERSHED_SEPARATION", "1").strip().lower() in {
+    "1", "true", "yes", "on",
+}
 
 # ===== REFINAMENTO POR BRILHO METÁLICO =====
 ENABLE_SPECULAR_FILTER = os.getenv("LAB_ENABLE_SPECULAR_FILTER", "1").strip().lower() in {
@@ -69,6 +83,13 @@ ENABLE_EDGE_MASK = os.getenv("LAB_ENABLE_EDGE_MASK", "1").strip().lower() in {
 EDGE_CANNY_LOW = int(os.getenv("LAB_EDGE_CANNY_LOW", "30"))
 EDGE_CANNY_HIGH = int(os.getenv("LAB_EDGE_CANNY_HIGH", "120"))
 EDGE_DILATE_ITER = int(os.getenv("LAB_EDGE_DILATE_ITER", "3"))
+
+# ===== SEPARAÇÃO POR INTENSIDADE (joias vs etiquetas) =====
+ENABLE_INTENSITY_SEPARATION = os.getenv("LAB_ENABLE_INTENSITY_SEPARATION", "1").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+INTENSITY_V_THRESHOLD = int(os.getenv("LAB_INTENSITY_V_THRESHOLD", "200"))
+INTENSITY_MIN_RATIO = float(os.getenv("LAB_INTENSITY_MIN_RATIO", "0.15"))
 
 # ===== ENSEMBLE =====
 ENABLE_ENSEMBLE = os.getenv("LAB_ENABLE_ENSEMBLE", "0").strip().lower() in {
