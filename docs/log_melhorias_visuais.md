@@ -319,3 +319,50 @@ Usuário sugeriu criar tabela/Excel com ajustes individuais por imagem:
 - pode_cortar_pontas (bool)
 - foco (joia inteira / pingente / etc)
 - modo (zoom / sem_zoom / original)
+
+
+---
+
+## Sessão 2026-06-16 — Diagnóstico e correções no novo batch (21 imagens)
+
+### Contexto
+Novo batch com 21 imagens (formato `20260529_*.jpg`, resolução 1836x4080). 
+Executado em Windows, venv Python, Tesseract 5.5, pyzbar disponível.
+
+### Bugs corrigidos
+
+#### 1. `renomear_intermediarios.py` — CSV com campos extras
+**Problema:** `DictWriter` hardcoded com 6 campos, mas `renomear_final.py` adicionou `white_antes`, `white_depois`, `rembg2_melhorou`.
+**Correção:** Detecta campos do CSV em runtime e inclui todos automaticamente.
+
+#### 2. `ler_codigo.py` — `_ocr_imagem_completa` causava timeout
+**Problema:** Imagens 1836x4080 + escala 1.5/2.2 criavam imagens ~2700x6120 que travavam o Tesseract (timeout 1s).
+**Correção:**
+- Adicionado downscale para `OCR_IMAGEM_COMPLETA_MAX_SIDE=900px` antes de qualquer escala
+- Priorizou regiões inferiores (código está sempre na parte baixa)
+- Adicionado `ABCDEFGHIJKLMNOPQRSTUVWXYZ` no whitelist (para capturar `BR...`, `CR...`, etc.)
+- **Impacto:** taxa de sucesso OCR subiu de **33% para 90%** (7/21 → 19/21 imagens com código)
+
+#### 3. `renomear_final.py` — `_bbox_joia` causava descentralização
+**Problema:** Detector dourado (HSV hue 15-35) pegava apenas pixels de reflexo pequenos, não a joia inteira, gerando bbox incorreto e descentralização pós-processamento (23-27% de offset).
+**Correção:** Substituído por detector baseado em **pixels não-brancos** (fundo branco = >= 240), que usa o canvas do rembg diretamente. Inclui filtro de componentes pequenos e agrupamento de componentes relevantes.
+**Impacto:** `BR1214006` corrigida de 23.2% → 0.6% offset; `CR2047000` de 27.3% → 0.1% offset.
+
+### Resultado final
+- 19/21 imagens com código correto (90%) — era 7/21 (33%)
+- 2 SEMCOD (`20260529_092238` e `20260529_103420`) — código não visível nem com OCR agressivo
+- Todas as 19 imagens: 1024×1024, fundo branco, joia centralizada (offset <1%), código no nome do arquivo
+- Validação de regressão: PASSOU
+- Testes da suite: 13 OK, 0 FALHAS, 2 AVISOS (esperados)
+
+### Laboratório de segmentação
+- Rodado com `--seed 42`, 10 imagens, concluiu 10/10 OK
+- Tempo médio: 32.5s/imagem (GrabCut pesado)
+- Relatório disponível em `temp/Laboratorio/resultados/relatorio_lab.html`
+- Filtros de máscara removendo em média 51.7% de pixels (agressivo para joias com metal claro)
+
+### Observações para próxima iteração
+1. `20260529_092238` e `20260529_103420` — sem código detectável; considerar revisão manual ou retreino do modelo YOLO
+2. `R3586000` — código lido incompleto (deveria ser `CR3586000`); OCR cortou o `C` na borda da região
+3. `BR1238006_p.jpg` — paint com timeout de OCR; considerar aumentar timeout ou pré-processamento específico para esse tipo de fonte
+4. Lab GrabCut muito lento (~32s/img) — considerar desabilitar `ENABLE_GRABCUT` nas iterações rápidas

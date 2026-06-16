@@ -522,6 +522,12 @@ def _ocr_paint_intensivo(paint_path: Path, deadline: float | None = None) -> str
     return None
 
 
+# Tamanho máximo do lado da imagem original para OCR completo.
+# Imagens maiores que isso são redimensionadas ANTES das escalas, evitando
+# timeout do Tesseract em fotos de 4K/8MP (ex: 1836x4080).
+OCR_IMAGEM_COMPLETA_MAX_SIDE = int(os.getenv("OCR_IMAGEM_COMPLETA_MAX_SIDE", "900"))
+
+
 def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> str | None:
     # ===== CACHE CHECK =====
     cache_key = _get_file_hash(caminho_img)
@@ -536,17 +542,26 @@ def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> st
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape[:2]
 
-    # regiões mais prováveis de conter código (base e faixa central)
+    # Limitar o tamanho antes de qualquer escala — evita timeout em imagens grandes (4K+)
+    maior_lado = max(h, w)
+    if maior_lado > OCR_IMAGEM_COMPLETA_MAX_SIDE:
+        fator_base = OCR_IMAGEM_COMPLETA_MAX_SIDE / float(maior_lado)
+        gray = cv2.resize(gray, None, fx=fator_base, fy=fator_base, interpolation=cv2.INTER_AREA)
+        h, w = gray.shape[:2]
+
+    # regiões mais prováveis de conter código (base e faixa inferior/central)
     regioes = [
-        gray,
-        gray[int(h * 0.55):h, :],
-        gray[int(h * 0.45):int(h * 0.95), int(w * 0.10):int(w * 0.90)],
+        gray[int(h * 0.55):h, :],                                        # parte inferior (código é quase sempre aqui)
+        gray[int(h * 0.45):int(h * 0.95), int(w * 0.10):int(w * 0.90)], # faixa central-inferior
+        gray,                                                              # imagem inteira (fallback)
     ]
 
     psm_configs = [
-        "--psm 7 -c tessedit_char_whitelist=0123456789",
-        "--psm 6 -c tessedit_char_whitelist=0123456789",
+        "--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
         "--psm 11 -c tessedit_char_whitelist=0123456789",
+        "--psm 6 -c tessedit_char_whitelist=0123456789",
     ]
 
     chamadas = 0
@@ -571,7 +586,8 @@ def _ocr_imagem_completa(caminho_img: Path, deadline: float | None = None) -> st
         for base in (clahe, otsu, 255 - otsu, adapt, 255 - adapt):
             if _deadline_exceeded(deadline):
                 return None
-            for escala in (1.5, 2.2, 3.0):
+            # Escalas menores já que a imagem foi pré-reduzida
+            for escala in (1.5, 2.0, 2.5):
                 if _deadline_exceeded(deadline):
                     return None
                 up = cv2.resize(base, None, fx=escala, fy=escala, interpolation=cv2.INTER_CUBIC)

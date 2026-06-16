@@ -67,34 +67,55 @@ def _tom_papel(img_bgr: np.ndarray) -> int:
 
 def _bbox_joia(gray: np.ndarray, img_bgr: np.ndarray = None):
     """
-    Detecta o bbox da joia.
-    Se img_bgr fornecido, usa dourado (hue 15-35) como detector primario.
-    Fallback: thresh<100, depois thresh<150.
+    Detecta o bbox da joia no canvas (fundo já removido pelo rembg).
+    
+    Estratégia principal: todos os pixels não-brancos são joia (fundo = branco >= 240).
+    Filtrar componentes pequenos (artefatos) e retornar o bbox do conjunto maior.
+    
+    Fallback (joias douradas com fundo papel): usa hue dourado.
     """
-    # Detector primario: dourado (joias douradas)
-    if img_bgr is not None:
-        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-        mask_d = (
-            (hsv[:,:,0] >= 15) & (hsv[:,:,0] <= 35) &
-            (hsv[:,:,1] >= 60) & (hsv[:,:,2] >= 60)
-        ).astype(np.uint8)
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask_d, connectivity=8)
-        m = np.zeros_like(mask_d)
-        for i in range(1, n):
-            if stats[i, cv2.CC_STAT_AREA] > 500:
-                m[labels == i] = 1
-        ys, xs = np.where(m > 0)
-        if len(ys):
-            return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+    SIZE = 1024  # canvas padrão
 
-    # Fallback: thresh<100 e thresh<150
-    for thresh in [100, 150]:
+    # --- Detector principal: pixels não-brancos (joia sobre fundo branco do rembg) ---
+    mask_joia = (gray < 240).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask_joia, connectivity=8)
+    
+    componentes = []
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area > 100:  # ignora artefatos minúsculos
+            componentes.append((area, i))
+    
+    if componentes:
+        # Usar todos os componentes com área >= 5% do maior
+        max_area = max(a for a, _ in componentes)
+        relevantes = [i for a, i in componentes if a >= max_area * 0.05]
+        
+        # bbox que engloba todos os componentes relevantes
+        xs_all, ys_all = [], []
+        for i in relevantes:
+            ys, xs = np.where(labels == i)
+            xs_all.extend([xs.min(), xs.max()])
+            ys_all.extend([ys.min(), ys.max()])
+        
+        if xs_all and ys_all:
+            x1, y1 = min(xs_all), min(ys_all)
+            x2, y2 = max(xs_all), max(ys_all)
+            joia_w, joia_h = x2 - x1, y2 - y1
+            maior_dim = max(joia_w, joia_h)
+            
+            # Se a joia detectada tem tamanho razoável (> 8% do canvas), usar
+            if maior_dim >= SIZE * 0.08:
+                return int(x1), int(y1), int(x2), int(y2)
+
+    # Fallback: thresh<150 (último recurso)
+    for thresh in [150]:
         mask = (gray < thresh).astype(np.uint8)
-        n, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        nf, labelsf, statsf, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         m = np.zeros_like(mask)
-        for i in range(1, n):
-            if stats[i, cv2.CC_STAT_AREA] > 200:
-                m[labels == i] = 1
+        for i in range(1, nf):
+            if statsf[i, cv2.CC_STAT_AREA] > 200:
+                m[labelsf == i] = 1
         ys, xs = np.where(m > 0)
         if len(ys):
             return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())

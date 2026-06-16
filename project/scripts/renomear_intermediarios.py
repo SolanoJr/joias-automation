@@ -134,11 +134,16 @@ def main():
         if novo:
             row["arquivo_origem"] = novo
 
+    # Usa os fieldnames do CSV existente para preservar todas as colunas
+    all_fields = ["arquivo_origem", "base", "codigo", "fonte", "arquivo_final", "status",
+                  "white_antes", "white_depois", "rembg2_melhorou"]
+    # Adiciona campos extras que possam existir nas linhas mas não na lista padrão
+    if rows:
+        extra = [k for k in rows[0].keys() if k not in all_fields]
+        all_fields.extend(extra)
+
     with CSV_PATH.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(
-            f,
-            fieldnames=["arquivo_origem", "base", "codigo", "fonte", "arquivo_final", "status"],
-        )
+        w = csv.DictWriter(f, fieldnames=all_fields, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
 
