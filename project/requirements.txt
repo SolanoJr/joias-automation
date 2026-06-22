@@ -38,7 +38,7 @@ pytesseract==0.3.13
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
 referencing==0.37.0
-rembg==2.0.69
+rembg==2.0.75
 requests==2.33.1
 rpds-py==0.30.0
 scikit-image==0.25.2
